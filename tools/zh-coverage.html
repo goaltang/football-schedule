@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>队名覆盖检查 · 赛程</title>
+<style>
+  body { background: #0B0E0C; color: #EDF2E6; font: 15px/1.6 "PingFang SC", "Microsoft YaHei", sans-serif; padding: 32px; }
+  h1 { font-size: 22px; letter-spacing: .1em; }
+  .sum { color: #D8FF47; margin-bottom: 18px; }
+  .lg { margin-bottom: 22px; }
+  .lg h2 { font-size: 16px; border-bottom: 1px solid rgba(237,242,230,.2); padding-bottom: 4px; }
+  pre { background: rgba(237,242,230,.05); border: 1px dashed rgba(237,242,230,.2); border-radius: 8px; padding: 12px; white-space: pre-wrap; }
+  .ok { color: #7E8A78; }
+  .err { color: #FF5236; }
+</style>
+</head>
+<body>
+<h1>队名覆盖检查</h1>
+<p id="sum" class="sum">拉取各联赛球队名单中……</p>
+<div id="out"></div>
+
+<script src="../config.js"></script>
+<script src="../team-names.js"></script>
+<script>
+'use strict';
+async function fetchTeams(lg) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${lg}/teams`, { cache: 'no-store' });
+      const json = await res.json();
+      return ((json.sports[0].leagues[0].teams) || []).map((t) => t.team.displayName);
+    } catch (e) {
+      lastErr = e;
+      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+(async () => {
+  const rows = [];
+  let total = 0;
+  let missing = 0;
+  let failed = 0;
+  for (const lg of LEAGUES) {
+    let teams = [];
+    try {
+      teams = await fetchTeams(lg.id);
+    } catch (e) {
+      failed++;
+      rows.push(`<div class="lg"><h2>${lg.zh}（${lg.en}）</h2><p class="err">拉取失败：${e}</p></div>`);
+      continue;
+    }
+    total += teams.length;
+    const miss = teams.filter((n) => zhName(n) === n).sort();
+    missing += miss.length;
+    rows.push(
+      `<div class="lg"><h2>${lg.zh}（${lg.en}） · ${teams.length} 队</h2>` +
+      (miss.length
+        ? `<p>未收录 ${miss.length} 队，把下面的条目补进 <code>team-names.js</code>：</p><pre>` +
+          miss.map((n) => `'${n}': '',`).join('\n') + `</pre>`
+        : `<p class="ok">全部已收录</p>`) +
+      `</div>`
+    );
+  }
+  document.getElementById('out').innerHTML = rows.join('');
+  const sumEl = document.getElementById('sum');
+  sumEl.textContent = `共 ${total} 队，未收录 ${missing} 队` + (failed ? ` · ${failed} 个联赛拉取失败（重试或稍后再跑）` : '');
+  if (failed) sumEl.classList.add('err');
+})();
+</script>
+</body>
+</html>

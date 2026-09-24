@@ -37,7 +37,20 @@ function esc(s) {
 }
 
 function teamName(t) {
-  return (t && TEAM_ZH[t.name]) || (t && t.name) || '';
+  return (t && zhName(t.name)) || (t && t.name) || '';
+}
+
+/* 未收录中文名的球队：console 提示一次，方便随时补进 team-names.js */
+function reportMissingNames() {
+  const missing = new Set();
+  for (const m of (state.data ? state.data.matches : [])) {
+    for (const s of [m.home, m.away]) {
+      if (s && s.name && zhName(s.name) === s.name) missing.add(s.name);
+    }
+  }
+  if (missing.size) {
+    console.warn(`[赛程] 未收录中文名（共 ${missing.size} 个，双击 tools/zh-coverage.html 可查全量）:`, [...missing].join(', '));
+  }
 }
 
 function fmtTime(iso) {

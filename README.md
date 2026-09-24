@@ -42,13 +42,17 @@
 | --- | --- |
 | `index.html` | 页面骨架，双击入口 |
 | `styles.css` | 样式（深色记分牌风格） |
-| `config.js` | 联赛列表、默认开启项、球队中文名对照 |
+| `config.js` | 联赛列表、默认开启项 |
+| `team-names.js` | 球队中文名对照表（含队名归一化） |
+| `tools/zh-coverage.html` | 队名覆盖检查：列出未收录中文名的球队 |
 | `data.js` | 数据层：ESPN 抓取、归一化、按天缓存、时区分桶 |
 | `app.js` | 界面层：日期/联赛切换、渲染、直播自动刷新 |
 
 ## 常见改动
 
 - **加/减联赛**：`config.js` 里 `LEAGUES` 增删一行（`id` 为 ESPN 联赛标识，如 `por.1` 葡超、`ned.1` 荷甲）。
-- **球队中文名**：`config.js` 里 `TEAM_ZH` 增加一行；没有对照的球队自动显示英文名。
+- **球队中文名**：`team-names.js` 增加一行；大小写、音调、`FC`/`AS` 前缀后缀等写法差异会自动归一，
+  不用为同一支球队写多条。查漏有两个途径：双击 `tools/zh-coverage.html`，一次列出所有联赛里还没收录的队名
+  （附可直接粘贴的空条目）；或平时看球时留意浏览器 console 的“未收录中文名”提示。
 - **换数据源**：只需重写 `data.js` 的 `fetchBucket`（拉原始数据）与 `normalizeEvent`（归一化为
   `{id, league, start, status, minute, home, away}`），界面层不用动。
