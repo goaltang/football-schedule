@@ -21,6 +21,8 @@ const state = {
   windowStart: null,
   enabled: new Set(),
   data: null,
+  nearby: null,
+  preview: null,
   loading: false,
   error: null,
 };
@@ -127,10 +129,12 @@ function renderDays() {
     const rel = relativeLabel(key);
     const sel = key === state.dayKey ? ' sel' : '';
     const isToday = key === today ? ' today' : '';
+    const has = cachedDayMatches(key, [...state.enabled]).length > 0;
     cells.push(
       `<button class="day${sel}${isToday}" data-day="${key}">` +
       `<span class="day-rel">${esc(rel)}</span>` +
       `<span class="day-date">${d.getMonth() + 1}/${d.getDate()}</span>` +
+      `<span class="day-dot${has ? '' : ' off'}"></span>` +
       `</button>`
     );
   }
@@ -218,10 +222,26 @@ function renderList() {
       );
     }
   } else if (d && !state.error) {
+    const nb = state.nearby || {};
+    const nearBtn = (t, label) => (t
+      ? `<button class="btn near" data-goto="${t.dayKey}">${label} · ${esc(fmtDayLabel(t.dayKey))} ${esc(weekdayOf(t.dayKey))} · ${t.count}场</button>`
+      : '');
     parts.push(
       `<div class="panel empty"><p>${esc(fmtDayLabel(state.dayKey))} · ${esc(weekdayOf(state.dayKey))} 没有所选联赛的比赛</p>` +
-      `<p class="sub">可能是国际比赛日间歇，或当天该联赛休赛；可在上方调整联赛筛选。</p></div>`
+      `<p class="sub">可能是国际比赛日间歇，或当天该联赛休赛；可在上方调整联赛筛选。</p>` +
+      `<div class="nearby">${nearBtn(nb.prev, '← 上一个比赛日')}${nearBtn(nb.next, '下一个比赛日 →')}</div></div>`
     );
+    const pv = state.preview;
+    if (pv) {
+      parts.push(
+        `<section class="league"><header class="lg-head"><h2>最近的比赛</h2>` +
+        `<span class="lg-en">${esc(fmtDayLabel(pv.dayKey))} ${esc(weekdayOf(pv.dayKey))}</span>` +
+        `<span class="lg-count">${pv.count}场</span></header>` +
+        pv.matches.slice(0, 8).map(matchRow).join('') +
+        `<div class="more"><button class="btn" data-goto="${pv.dayKey}">查看当天全部 ${pv.count} 场 →</button></div>` +
+        `</section>`
+      );
+    }
   }
 
   root.innerHTML = parts.join('');
@@ -248,6 +268,19 @@ async function reload(opts = {}) {
     const data = await loadDay(state.dayKey, { leagues: [...state.enabled], force: opts.force });
     if (seq !== loadSeq) return;
     state.data = data;
+    state.nearby = null;
+    state.preview = null;
+    if (!data.matches.length) {
+      const nearby = await findNearbyMatchdays(state.dayKey, { leagues: [...state.enabled] });
+      if (seq !== loadSeq) return;
+      state.nearby = nearby;
+      const target = nearby.next || nearby.prev;
+      if (target) {
+        const pv = await loadDay(target.dayKey, { leagues: [...state.enabled] });
+        if (seq !== loadSeq) return;
+        state.preview = { dayKey: target.dayKey, count: pv.matches.length, matches: pv.matches };
+      }
+    }
   } catch (e) {
     if (seq !== loadSeq) return;
     state.error = (e && e.message) || '未知错误';
@@ -295,6 +328,11 @@ function bind() {
     reload();
   });
   $('#list').addEventListener('click', (e) => {
+    const goto = e.target.closest('[data-goto]');
+    if (goto) {
+      gotoDay(goto.dataset.goto);
+      return;
+    }
     if (e.target.id === 'retry') reload({ force: true });
   });
   $('#refresh').addEventListener('click', () => reload({ force: true }));
