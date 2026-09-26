@@ -19,17 +19,14 @@
 
 ## 手机上用 / PWA
 
-自带 PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）：页面只要通过 **http(s)** 打开，
-手机浏览器"添加到主屏幕"后就像独立 App 一样打开，并且**完全离线可用**（壳 + 队徽 + 最近缓存的赛程）。
-双击 `file://` 打开时 PWA 自动静默降级，PC 上的日常使用不受影响。
+已部署上线：**https://goaltang.github.io/football-schedule/**
 
-想让手机也能用，部署到 GitHub Pages 即可（Pages 对**私有**仓库收费，需先公开）：
+手机浏览器（Safari / Chrome）打开后"添加到主屏幕"，就像独立 App 一样使用，
+且**完全离线可用**（壳 + 队徽 + 最近缓存的赛程）。PC 上仍可双击 `index.html`，两种用法并存。
 
-```
-gh repo edit goaltang/football-schedule --visibility public
-```
-
-然后仓库 Settings → Pages → Source 选 `main` 分支，访问 `https://goaltang.github.io/football-schedule/`。
+PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生效，
+`file://` 打开时自动静默降级。部署位置是 GitHub Pages 的**项目站点**（每个仓库一个，互不占用），
+和 `<user>.github.io` 个人主页共存；仓库已公开以启用免费 Pages。
 
 ## 数据源：一般怎么解决
 
