@@ -15,11 +15,13 @@ const LIVE_POLL_MS = 60e3;
 const STRIP_LEN = 7;
 const LS_ENABLED = 'fs1.enabled';
 const LS_DAY = 'fs1.day';
+const LS_FOLLOWED = 'fs1.followed';
 
 const state = {
   dayKey: null,
   windowStart: null,
   enabled: new Set(),
+  followed: new Set(),
   data: null,
   nearby: null,
   preview: null,
@@ -40,6 +42,29 @@ function esc(s) {
 
 function teamName(t) {
   return (t && zhName(t.name)) || (t && t.name) || '';
+}
+
+function leagueZh(leagueId) {
+  return (LEAGUES.find((l) => l.id === leagueId) || {}).zh || '';
+}
+
+/* 关注球队：以归一化后的队名为身份，写法差异不影响命中 */
+function isFollowed(name) {
+  return !!name && state.followed.has(normalizeTeamName(name));
+}
+
+function matchHasFollowed(m) {
+  return (m.home && isFollowed(m.home.name)) || (m.away && isFollowed(m.away.name));
+}
+
+function toggleFollow(name) {
+  const key = normalizeTeamName(name);
+  if (state.followed.has(key)) state.followed.delete(key);
+  else state.followed.add(key);
+  savePrefs();
+  render();
+  /* 空日期的“最近的比赛”会优先跳关注球队，关注变化后需要重算 */
+  if (state.data && !state.data.matches.length) reload();
 }
 
 /* 未收录中文名的球队：console 提示一次，方便随时补进 team-names.js */
@@ -103,6 +128,12 @@ function loadPrefs() {
   } catch (e) {
     state.enabled = new Set(DEFAULT_ENABLED);
   }
+  try {
+    const fav = JSON.parse(localStorage.getItem(LS_FOLLOWED) || '[]');
+    state.followed = new Set(Array.isArray(fav) ? fav : []);
+  } catch (e) {
+    state.followed = new Set();
+  }
   const savedDay = (() => { try { return localStorage.getItem(LS_DAY); } catch (e) { return null; } })();
   const today = dayKeyOf(new Date());
   state.dayKey = savedDay && /^\d{4}-\d{2}-\d{2}$/.test(savedDay) ? savedDay : today;
@@ -114,6 +145,7 @@ function loadPrefs() {
 function savePrefs() {
   try {
     localStorage.setItem(LS_ENABLED, JSON.stringify([...state.enabled]));
+    localStorage.setItem(LS_FOLLOWED, JSON.stringify([...state.followed]));
     localStorage.setItem(LS_DAY, state.dayKey);
   } catch (e) { /* 隐私模式等场景忽略 */ }
 }
@@ -129,12 +161,13 @@ function renderDays() {
     const rel = relativeLabel(key);
     const sel = key === state.dayKey ? ' sel' : '';
     const isToday = key === today ? ' today' : '';
-    const has = cachedDayMatches(key, [...state.enabled]).length > 0;
+    const ms = cachedDayMatches(key, [...state.enabled]);
+    const dotCls = ms.some(matchHasFollowed) ? 'fill' : ms.length ? 'hollow' : 'off';
     cells.push(
       `<button class="day${sel}${isToday}" data-day="${key}">` +
       `<span class="day-rel">${esc(rel)}</span>` +
       `<span class="day-date">${d.getMonth() + 1}/${d.getDate()}</span>` +
-      `<span class="day-dot${has ? '' : ' off'}"></span>` +
+      `<span class="day-dot ${dotCls}"></span>` +
       `</button>`
     );
   }
@@ -148,10 +181,11 @@ function renderChips() {
   }).join('');
 }
 
-function matchRow(m) {
+function matchRow(m, opts = {}) {
   const zh = (t) => esc(teamName(t));
   const en = (t) => esc((t && t.name) || '');
   const logo = (t) => (t && t.logo ? `<img class="logo" src="${esc(t.logo)}" alt="" loading="lazy" onerror="this.classList.add('broken')">` : '<span class="logo ghost"></span>');
+  const star = (t) => `<button class="star${isFollowed(t && t.name) ? ' on' : ''}" data-star="${en(t)}" title="关注/取消关注">${isFollowed(t && t.name) ? '★' : '☆'}</button>`;
   const scorePart = (() => {
     if (m.status === 'SCHEDULED' || m.status === 'DELAYED' || m.status === 'POSTPONED') return '<span class="vs">vs</span>';
     const hs = m.home && m.home.score != null ? m.home.score : '–';
@@ -167,10 +201,10 @@ function matchRow(m) {
   })();
   return (
     `<div class="match st-${m.status}">` +
-    `<div class="rail"><time>${fmtTime(m.start)}</time><span class="wd">${periodLabel(m.start)}</span></div>` +
-    `<div class="side home"><span class="tname" title="${en(m.home)}">${zh(m.home)}</span>${logo(m.home)}</div>` +
+    `<div class="rail"><time>${fmtTime(m.start)}</time><span class="wd">${opts.tag ? esc(leagueZh(m.league)) + ' · ' : ''}${periodLabel(m.start)}</span></div>` +
+    `<div class="side home"><span class="tname" title="${en(m.home)}">${zh(m.home)}</span>${star(m.home)}${logo(m.home)}</div>` +
     `<div class="score">${scorePart}</div>` +
-    `<div class="side away">${logo(m.away)}<span class="tname" title="${en(m.away)}">${zh(m.away)}</span></div>` +
+    `<div class="side away">${logo(m.away)}${star(m.away)}<span class="tname" title="${en(m.away)}">${zh(m.away)}</span></div>` +
     `<div class="status">${statusPart}</div>` +
     `</div>`
   );
@@ -204,6 +238,15 @@ function renderList() {
   }
 
   if (d && d.matches.length) {
+    const fav = d.matches.filter(matchHasFollowed);
+    if (fav.length) {
+      parts.push(
+        `<section class="league"><header class="lg-head"><h2>★ 我的关注</h2>` +
+        `<span class="lg-en">Followed</span><span class="lg-count">${fav.length}场</span></header>` +
+        fav.map((m) => matchRow(m, { tag: true })).join('') +
+        `</section>`
+      );
+    }
     const byLeague = new Map();
     for (const m of d.matches) {
       if (!byLeague.has(m.league)) byLeague.set(m.league, []);
@@ -233,12 +276,13 @@ function renderList() {
     );
     const pv = state.preview;
     if (pv) {
+      const title = pv.kind === 'followed' ? '你关注的球队 · 最近的比赛' : '最近的比赛';
       parts.push(
-        `<section class="league"><header class="lg-head"><h2>最近的比赛</h2>` +
+        `<section class="league"><header class="lg-head"><h2>${title}</h2>` +
         `<span class="lg-en">${esc(fmtDayLabel(pv.dayKey))} ${esc(weekdayOf(pv.dayKey))}</span>` +
         `<span class="lg-count">${pv.count}场</span></header>` +
-        pv.matches.slice(0, 8).map(matchRow).join('') +
-        `<div class="more"><button class="btn" data-goto="${pv.dayKey}">查看当天全部 ${pv.count} 场 →</button></div>` +
+        pv.matches.slice(0, 8).map((m) => matchRow(m, { tag: pv.kind === 'followed' })).join('') +
+        `<div class="more"><button class="btn" data-goto="${pv.dayKey}">查看当天全部 ${pv.total} 场 →</button></div>` +
         `</section>`
       );
     }
@@ -274,11 +318,29 @@ async function reload(opts = {}) {
       const nearby = await findNearbyMatchdays(state.dayKey, { leagues: [...state.enabled] });
       if (seq !== loadSeq) return;
       state.nearby = nearby;
-      const target = nearby.next || nearby.prev;
-      if (target) {
-        const pv = await loadDay(target.dayKey, { leagues: [...state.enabled] });
+      let target = null;
+      let kind = 'any';
+      if (state.followed.size) {
+        const fav = await findNearbyMatchdays(state.dayKey, {
+          leagues: [...state.enabled],
+          matchFilter: matchHasFollowed,
+        });
         if (seq !== loadSeq) return;
-        state.preview = { dayKey: target.dayKey, count: pv.matches.length, matches: pv.matches };
+        const f = fav.next || fav.prev;
+        if (f) {
+          target = f.dayKey;
+          kind = 'followed';
+        }
+      }
+      if (!target) {
+        const g = nearby.next || nearby.prev;
+        if (g) target = g.dayKey;
+      }
+      if (target) {
+        const pv = await loadDay(target, { leagues: [...state.enabled] });
+        if (seq !== loadSeq) return;
+        const rows = kind === 'followed' ? pv.matches.filter(matchHasFollowed) : pv.matches;
+        state.preview = { dayKey: target, kind, count: rows.length, total: pv.matches.length, matches: rows };
       }
     }
   } catch (e) {
@@ -328,6 +390,11 @@ function bind() {
     reload();
   });
   $('#list').addEventListener('click', (e) => {
+    const star = e.target.closest('[data-star]');
+    if (star) {
+      toggleFollow(star.dataset.star);
+      return;
+    }
     const goto = e.target.closest('[data-goto]');
     if (goto) {
       gotoDay(goto.dataset.goto);

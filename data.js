@@ -297,10 +297,12 @@ function cachedDayMatches(dayKey, leagueIds) {
 }
 
 /* ---------- 对外：空日期时找最近的比赛日 ----------
- * 由近及远双向探测；每个月首次会真正抓取（受 maxMonths 预算约束），之后全走缓存
+ * 由近及远双向探测；每个月首次会真正抓取（受 maxMonths 预算约束），之后全走缓存。
+ * opts.matchFilter：只认满足条件的比赛（如“含关注球队”），用于优先跳到关注球队的比赛日
  */
 async function findNearbyMatchdays(dayKey, opts = {}) {
   const leagues = opts.leagues || DEFAULT_ENABLED;
+  const matchFilter = opts.matchFilter || null;
   const maxMonths = opts.maxMonths ?? 4;
   const maxDays = opts.maxDays ?? 200;
   const result = { prev: null, next: null };
@@ -319,7 +321,8 @@ async function findNearbyMatchdays(dayKey, opts = {}) {
         }
       }
       if (fetched) budget--;
-      const count = cachedDayMatches(cand, leagues).length;
+      const all = cachedDayMatches(cand, leagues);
+      const count = matchFilter ? all.filter(matchFilter).length : all.length;
       if (count > 0) {
         result[dir === 1 ? 'next' : 'prev'] = { dayKey: cand, count };
         break;
