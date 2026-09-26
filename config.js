@@ -19,3 +19,5 @@ const LEAGUES = [
 ];
 
 const DEFAULT_ENABLED = LEAGUES.slice(0, 8).map((l) => l.id);
+
+if (typeof module !== 'undefined') module.exports = { LEAGUES, DEFAULT_ENABLED };

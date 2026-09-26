@@ -158,6 +158,7 @@ function normalizeEvent(ev, leagueId) {
   const comp = (ev.competitions && ev.competitions[0]) || {};
   const side = (c) => ({
     name: (c.team && c.team.displayName) || '未知球队',
+    teamId: (c.team && c.team.id) ? String(c.team.id) : '',
     logo: (c.team && ((c.team.logos && c.team.logos[0] && c.team.logos[0].href) || c.team.logo)) || '',
     score: c.score == null ? null : Number(c.score),
     winner: !!c.winner,

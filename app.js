@@ -55,6 +55,37 @@ function smallLogo(url) {
   return m ? `https://a.espncdn.com/combiner/i?img=${m[1]}&w=64&h=64` : url;
 }
 
+/* 图标加载链：本地 logos/（随项目分发，0 网络）→ 缩略图 → 原图 → 隐藏 */
+function imgFallback(img) {
+  const rest = (img.dataset.fb || '').split('|').filter(Boolean);
+  if (rest.length) {
+    img.dataset.fb = rest.slice(1).join('|');
+    img.src = rest[0];
+  } else {
+    img.classList.add('broken');
+  }
+}
+
+function logoImg(t, size) {
+  const px = size || 28;
+  if (!t || (!t.logo && !t.teamId)) return `<span class="logo ghost" style="width:${px}px;height:${px}px"></span>`;
+  const chain = [];
+  if (t.teamId) chain.push(`logos/${t.teamId}.png`);
+  if (t.logo) chain.push(smallLogo(t.logo), t.logo);
+  return (
+    `<img class="logo" src="${esc(chain[0])}" data-fb="${esc(chain.slice(1).join('|'))}" ` +
+    `width="${px}" height="${px}" decoding="async" loading="lazy" alt="" onerror="imgFallback(this)">`
+  );
+}
+
+function crestImg(lgId, url) {
+  const chain = [`logos/lg-${lgId}.png`, smallLogo(url), url].filter(Boolean);
+  return (
+    `<img class="crest" src="${esc(chain[0])}" data-fb="${esc(chain.slice(1).join('|'))}" ` +
+    `width="18" height="18" decoding="async" loading="lazy" alt="" onerror="imgFallback(this)">`
+  );
+}
+
 /* 关注球队：以归一化后的队名为身份，写法差异不影响命中 */
 function isFollowed(name) {
   return !!name && state.followed.has(normalizeTeamName(name));
@@ -191,10 +222,7 @@ function renderChips() {
 function matchRow(m, opts = {}) {
   const zh = (t) => esc(teamName(t));
   const en = (t) => esc((t && t.name) || '');
-  const logo = (t) => {
-    if (!t || !t.logo) return '<span class="logo ghost"></span>';
-    return `<img class="logo" src="${esc(smallLogo(t.logo))}" data-orig="${esc(t.logo)}" width="28" height="28" decoding="async" loading="lazy" alt="" onerror="if (this.dataset.retry) { this.classList.add('broken'); } else { this.dataset.retry = 1; this.src = this.dataset.orig; }">`;
-  };
+  const logo = (t) => logoImg(t);
   const star = (t) => `<button class="star${isFollowed(t && t.name) ? ' on' : ''}" data-star="${en(t)}" title="关注/取消关注">${isFollowed(t && t.name) ? '★' : '☆'}</button>`;
   const scorePart = (() => {
     if (m.status === 'SCHEDULED' || m.status === 'DELAYED' || m.status === 'POSTPONED') return '<span class="vs">vs</span>';
@@ -266,7 +294,7 @@ function renderList() {
       const ms = byLeague.get(lg.id);
       if (!ms || !ms.length) continue;
       const meta = d.leagueMeta.get(lg.id) || {};
-      const crest = meta.logo ? `<img class="crest" src="${esc(smallLogo(meta.logo))}" data-orig="${esc(meta.logo)}" width="18" height="18" decoding="async" loading="lazy" alt="" onerror="if (this.dataset.retry) { this.remove(); } else { this.dataset.retry = 1; this.src = this.dataset.orig; }">` : '';
+      const crest = meta.logo ? crestImg(lg.id, meta.logo) : '';
       parts.push(
         `<section class="league">` +
         `<header class="lg-head">${crest}<h2>${esc(lg.zh)}</h2><span class="lg-en">${esc(lg.en)}</span><span class="lg-count">${ms.length}场</span></header>` +

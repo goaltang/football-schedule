@@ -39,8 +39,9 @@
 通用经验：不管用哪个源，都值得做一层**按天缓存**（本项目存 localStorage，服务端方案存 SQLite/文件），
 这样每天打开是秒开的，源站抽风或断网时也能看最近一次的数据；时区一定要在客户端按本地日期切分，
 本项目中华东时区的早场（如凌晨 3:00）会正确归到当天。
-图片同理：队徽显示只有 28px，走 ESPN 的缩略图接口（64px，约 6KB，缓存 24h），
-而不是 500px 原图（约 130KB，缓存仅 2h）——一天 40 个队徽的场景下数据量差 20 倍。
+图片同理：队徽显示只有 28px，绝不下 500px 原图（130KB）；本项目直接把 64px 缩略图
+**打包进 logos/ 目录随项目分发**（懂球帝这类站点就是自托管队徽到国内 CDN 的思路），
+打开页面图标零网络请求、断网也全量显示；本地缺失的新球队才回退到远程缩略图（约 6KB）。
 
 ## 文件说明
 
@@ -50,15 +51,19 @@
 | `styles.css` | 样式（深色记分牌风格） |
 | `config.js` | 联赛列表、默认开启项 |
 | `team-names.js` | 球队中文名对照表（含队名归一化） |
+| `logos/` | 本地队徽/联赛标（64px，随项目分发，打开页面 0 网络请求） |
 | `tools/zh-coverage.html` | 队名覆盖检查：列出未收录中文名的球队 |
+| `tools/refresh-logos.js` | 图标刷新：下载/更新 logos/（新赛季或加联赛后跑一次） |
 | `data.js` | 数据层：ESPN 抓取、归一化、按月缓存、时区分桶、空日就近搜索 |
 | `app.js` | 界面层：日期/联赛切换、渲染、直播自动刷新 |
 
 ## 常见改动
 
-- **加/减联赛**：`config.js` 里 `LEAGUES` 增删一行（`id` 为 ESPN 联赛标识，如 `por.1` 葡超、`ned.1` 荷甲）。
+- **加/减联赛**：`config.js` 里 `LEAGUES` 增删一行（`id` 为 ESPN 联赛标识，如 `por.1` 葡超、`ned.1` 荷甲）；
+  增加后跑一次 `node tools/refresh-logos.js` 把新联赛队徽下载到本地。
 - **球队中文名**：`team-names.js` 增加一行；大小写、音调、`FC`/`AS` 前缀后缀等写法差异会自动归一，
   不用为同一支球队写多条。查漏有两个途径：双击 `tools/zh-coverage.html`，一次列出所有联赛里还没收录的队名
   （附可直接粘贴的空条目）；或平时看球时留意浏览器 console 的“未收录中文名”提示。
 - **换数据源**：只需重写 `data.js` 的 `fetchBucket`（拉原始数据）与 `normalizeEvent`（归一化为
-  `{id, league, start, status, minute, home, away}`），界面层不用动。
+  `{id, league, start, status, minute, home, away}`，其中 `home/away = {name, teamId, logo, score, winner}`），
+  界面层不用动；`teamId` 用于命中本地图标 `logos/<teamId>.png`。
