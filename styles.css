@@ -134,6 +134,16 @@ body {
 .btn.near { padding: 8px 14px; }
 .more { text-align: center; padding: 12px 0 2px; }
 
+.today-jump { flex: none; }
+.today-jump.off { color: var(--accent); border-color: rgba(216, 255, 71, 0.5); }
+
+/* 触屏：加大可点按区域（视觉尺寸不变） */
+@media (pointer: coarse) {
+  .star { padding: 9px 8px; margin: -8px -6px; }
+  .nav { min-width: 44px; }
+  .chip { padding: 8px 14px; }
+}
+
 .btn {
   border: 1px solid var(--line); background: transparent; color: var(--muted);
   padding: 0 14px; border-radius: 6px; cursor: pointer; font-family: var(--body); font-size: 13px;

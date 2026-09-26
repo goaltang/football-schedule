@@ -211,6 +211,7 @@ function renderDays() {
     );
   }
   $('#days').innerHTML = cells.join('');
+  $('#goToday') && $('#goToday').classList.toggle('off', state.dayKey !== today);
 }
 
 function renderChips() {
@@ -434,6 +435,7 @@ function bind() {
   });
   $('#prevDay').addEventListener('click', () => gotoDay(addDays(state.dayKey, -1)));
   $('#nextDay').addEventListener('click', () => gotoDay(addDays(state.dayKey, 1)));
+  $('#goToday').addEventListener('click', () => gotoDay(dayKeyOf(new Date())));
   $('#chips').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-league]');
     if (!btn) return;
@@ -472,6 +474,7 @@ function bind() {
     if (t && t.matches && t.matches('input, textarea')) return;
     if (e.key === 'ArrowLeft') gotoDay(addDays(state.dayKey, -1));
     if (e.key === 'ArrowRight') gotoDay(addDays(state.dayKey, 1));
+    if (e.key === 'Home' || e.key === 't') gotoDay(dayKeyOf(new Date()));
   });
 }
 
@@ -487,3 +490,14 @@ loadPrefs();
 render();
 reload();
 timezoneNote();
+
+/* PWA：仅 http(s) 托管时注册 Service Worker 与 manifest
+ * （file:// 打开静默降级，功能不受影响，也避免控制台报 manifest 404）
+ */
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  const link = document.createElement('link');
+  link.rel = 'manifest';
+  link.href = 'manifest.webmanifest';
+  document.head.appendChild(link);
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
