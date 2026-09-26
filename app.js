@@ -105,16 +105,17 @@ function toggleFollow(name) {
   if (state.data && !state.data.matches.length) reload();
 }
 
-/* 未收录中文名的球队：console 提示一次，方便随时补进 team-names.js */
+/* 未收录中文名的球队：console 提示（每个名字只提示一次），方便随时补进 team-names.js */
+const reportedNames = new Set();
+
 function reportMissingNames() {
-  const missing = new Set();
   for (const m of (state.data ? state.data.matches : [])) {
     for (const s of [m.home, m.away]) {
-      if (s && s.name && zhName(s.name) === s.name) missing.add(s.name);
+      if (s && s.name && zhName(s.name) === s.name && !reportedNames.has(s.name)) {
+        reportedNames.add(s.name);
+        console.warn(`[赛程] 未收录中文名: ${s.name}（双击 tools/zh-coverage.html 可查全量）`);
+      }
     }
-  }
-  if (missing.size) {
-    console.warn(`[赛程] 未收录中文名（共 ${missing.size} 个，双击 tools/zh-coverage.html 可查全量）:`, [...missing].join(', '));
   }
 }
 
@@ -303,6 +304,13 @@ function renderList() {
       );
     }
   } else if (d && !state.error) {
+    if (!d.fetchedAt && d.pending) {
+      parts.push(
+        `<div class="panel"><p>正在加载赛程…</p>` +
+        `<p class="sub">网络较慢或不可用时会停在这里，拿到数据会自动出现；也可以稍后点重试。</p>` +
+        `<button class="btn" id="retry">重试</button></div>`
+      );
+    } else {
     const nb = state.nearby || {};
     const nearBtn = (t, label) => (t
       ? `<button class="btn near" data-goto="${t.dayKey}">${label} · ${esc(fmtDayLabel(t.dayKey))} ${esc(weekdayOf(t.dayKey))} · ${t.count}场</button>`
@@ -324,12 +332,14 @@ function renderList() {
         `</section>`
       );
     }
+    }
   }
 
   root.innerHTML = parts.join('');
   $('#refresh') && $('#refresh').classList.toggle('busy', state.loading);
+  reportMissingNames();
   $('#updated').textContent = d && d.fetchedAt
-    ? `更新于 ${fmtClock(d.fetchedAt)}${d.fromCache ? ' · 缓存' : ''}`
+    ? `更新于 ${fmtClock(d.fetchedAt)}${d.pending ? ' · 更新中…' : d.fromCache ? ' · 缓存' : ''}`
     : '';
 }
 
@@ -341,57 +351,65 @@ function render() {
 
 /* ---------- 加载与轮询 ---------- */
 
+/* 空日期的补全：找上/下一个比赛日与关注球队预览（网络慢时独立于首屏渲染） */
+async function enrichEmptyDay(seq) {
+  const nearby = await findNearbyMatchdays(state.dayKey, {
+    leagues: [...state.enabled],
+    isFav: state.followed.size ? matchHasFollowed : null,
+  });
+  if (seq !== loadSeq) return;
+  state.nearby = nearby;
+  const f = nearby.favNext || nearby.favPrev;
+  const g = nearby.next || nearby.prev;
+  const target = f || g;
+  const kind = f ? 'followed' : 'any';
+  if (target) {
+    const pv = await loadDay(target.dayKey, { leagues: [...state.enabled] });
+    if (seq !== loadSeq) return;
+    const rows = kind === 'followed' ? pv.matches.filter(matchHasFollowed) : pv.matches;
+    state.preview = { dayKey: target.dayKey, kind, count: rows.length, total: pv.matches.length, matches: rows };
+  }
+  render();
+}
+
 async function reload(opts = {}) {
   const seq = ++loadSeq;
   state.loading = true;
   state.error = null;
   renderList();
   try {
-    const data = await loadDay(state.dayKey, { leagues: [...state.enabled], force: opts.force });
+    const data = await loadDay(state.dayKey, {
+      leagues: [...state.enabled],
+      force: opts.force,
+      onUpdate: (fresh) => {
+        /* 后台重验完成：静默替换为新数据 */
+        if (seq !== loadSeq || state.dayKey !== fresh.dayKey) return;
+        state.data = fresh;
+        render();
+        if (fresh.fetchedAt && !fresh.matches.length && !state.nearby) enrichEmptyDay(seq);
+        scheduleLivePoll();
+      },
+    });
     if (seq !== loadSeq) return;
     state.data = data;
     state.nearby = null;
     state.preview = null;
-    if (!data.matches.length) {
-      const nearby = await findNearbyMatchdays(state.dayKey, { leagues: [...state.enabled] });
-      if (seq !== loadSeq) return;
-      state.nearby = nearby;
-      let target = null;
-      let kind = 'any';
-      if (state.followed.size) {
-        const fav = await findNearbyMatchdays(state.dayKey, {
-          leagues: [...state.enabled],
-          matchFilter: matchHasFollowed,
-        });
-        if (seq !== loadSeq) return;
-        const f = fav.next || fav.prev;
-        if (f) {
-          target = f.dayKey;
-          kind = 'followed';
-        }
-      }
-      if (!target) {
-        const g = nearby.next || nearby.prev;
-        if (g) target = g.dayKey;
-      }
-      if (target) {
-        const pv = await loadDay(target, { leagues: [...state.enabled] });
-        if (seq !== loadSeq) return;
-        const rows = kind === 'followed' ? pv.matches.filter(matchHasFollowed) : pv.matches;
-        state.preview = { dayKey: target, kind, count: rows.length, total: pv.matches.length, matches: rows };
-      }
-    }
+    state.loading = false;
+    render(); /* 先出当日视图：空场面板不等就近搜索 */
+    if (data.fetchedAt && !data.matches.length) await enrichEmptyDay(seq);
   } catch (e) {
     if (seq !== loadSeq) return;
     state.error = (e && e.message) || '未知错误';
+    state.loading = false;
+    render();
+    return;
   }
-  state.loading = false;
-  render();
   scheduleLivePoll();
 }
 
 function scheduleLivePoll() {
   clearTimeout(liveTimer);
+  if (document.hidden) return;
   const hasLive = state.data && state.data.matches.some((m) => m.live);
   if (hasLive) liveTimer = setTimeout(() => reload({ force: true }), LIVE_POLL_MS);
 }
@@ -441,6 +459,14 @@ function bind() {
     if (e.target.id === 'retry') reload({ force: true });
   });
   $('#refresh').addEventListener('click', () => reload({ force: true }));
+  /* 标签页隐藏时停掉直播轮询，切回前台立即补一次 */
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      clearTimeout(liveTimer);
+    } else if (state.data && state.data.matches.some((m) => m.live)) {
+      reload({ force: true });
+    }
+  });
   document.addEventListener('keydown', (e) => {
     const t = e.target;
     if (t && t.matches && t.matches('input, textarea')) return;

@@ -87,18 +87,27 @@ function cacheKey(leagueId, ym) {
   return `${CACHE_PREFIX}m|${leagueId}|${ym}`;
 }
 
+const cacheMemo = new Map();
+
 function readCache(leagueId, ym) {
+  const key = cacheKey(leagueId, ym);
+  if (cacheMemo.has(key)) return cacheMemo.get(key);
+  let val = null;
   try {
-    const raw = storage.getItem(cacheKey(leagueId, ym));
-    return raw ? JSON.parse(raw) : null;
+    const raw = storage.getItem(key);
+    val = raw ? JSON.parse(raw) : null;
   } catch (e) {
-    return null;
+    val = null;
   }
+  cacheMemo.set(key, val);
+  return val;
 }
 
 function writeCache(leagueId, ym, data) {
+  const key = cacheKey(leagueId, ym);
+  cacheMemo.set(key, data);
   try {
-    storage.setItem(cacheKey(leagueId, ym), JSON.stringify(data));
+    storage.setItem(key, JSON.stringify(data));
     pruneCache();
   } catch (e) {
     /* 配额满或不可用：放弃缓存，不影响本次展示 */
@@ -110,14 +119,26 @@ function pruneCache() {
   for (let i = 0; i < storage.length; i++) {
     const k = storage.key(i);
     if (k && k.startsWith(CACHE_PREFIX)) {
+      const ym = k.split('|')[3] || '';
       let t = 0;
       try { t = JSON.parse(storage.getItem(k)).fetchedAt || 0; } catch (e) { /* 坏条目直接淘汰 */ }
-      entries.push([k, t]);
+      /* 淘汰顺序：先踢离当前月最远的（和今天关系最小），同距离再踢最旧抓取的；
+         旧格式键（解析不出月份）视为最远，顺带清理 */
+      entries.push([k, { t, d: /^\d{6}$/.test(ym) ? monthDistance(ym) : 9999 }]);
     }
   }
   if (entries.length <= CACHE_MAX_ENTRIES) return;
-  entries.sort((a, b) => a[1] - b[1]);
-  for (const [k] of entries.slice(0, entries.length - CACHE_MAX_ENTRIES)) storage.removeItem(k);
+  entries.sort((a, b) => (b[1].d - a[1].d) || (a[1].t - b[1].t));
+  for (const [k] of entries.slice(0, entries.length - CACHE_MAX_ENTRIES)) {
+    storage.removeItem(k);
+    cacheMemo.delete(k);
+  }
+}
+
+function monthDistance(ym) {
+  const now = new Date();
+  const cur = now.getFullYear() * 12 + now.getMonth();
+  return Math.abs(Number(ym.slice(0, 4)) * 12 + Number(ym.slice(4, 6)) - 1 - cur);
 }
 
 /* 缓存有效期：过去的月份 24 小时（补赛/改期仍会更新），当月与未来 30 分钟 */
@@ -193,11 +214,32 @@ function normalizeLeagueMeta(json, leagueId) {
 
 const inflight = new Map();
 
+/* 网络熔断：短时间连败后进入冷却期，抓取快速失败回落缓存，避免弱网下长时间空转 */
+let netFailStreak = 0;
+let netCooldownUntil = 0;
+
+function noteNetResult(ok) {
+  if (ok) {
+    netFailStreak = 0;
+    return;
+  }
+  netFailStreak++;
+  if (netFailStreak >= 4) {
+    netCooldownUntil = Date.now() + 30e3;
+    netFailStreak = 0;
+  }
+}
+
+function networkCoolingDown() {
+  return Date.now() < netCooldownUntil;
+}
+
 function fetchMonth(leagueId, ym) {
   const key = cacheKey(leagueId, ym);
   if (inflight.has(key)) return inflight.get(key);
   const p = fetchJson(`${ESPN_BASE}/${leagueId}/scoreboard?dates=${ym}`)
     .then((json) => {
+      noteNetResult(true);
       const data = {
         fetchedAt: Date.now(),
         league: normalizeLeagueMeta(json, leagueId),
@@ -206,16 +248,27 @@ function fetchMonth(leagueId, ym) {
       writeCache(leagueId, ym, data);
       return { data, fromCache: false };
     })
+    .catch((err) => {
+      noteNetResult(false);
+      throw err;
+    })
     .finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
 }
 
-/* 取某联赛某月的数据：缓存新鲜则直接用，否则抓取（失败回落旧缓存） */
-async function ensureMonth(leagueId, ym, allowFetch = true) {
+/* 取某联赛某月的数据：缓存新鲜则直接用，否则抓取（失败回落旧缓存）
+ * opts.force：无视缓存新鲜度强制抓取（刷新按钮 / 直播轮询）
+ * opts.cacheOnly：只读缓存不发网络（stale-while-revalidate 的第一步）
+ */
+async function ensureMonth(leagueId, ym, opts = {}) {
   const cached = readCache(leagueId, ym);
-  if (cached && Date.now() - cached.fetchedAt < monthTtlMs(ym)) return { data: cached, fromCache: true };
-  if (!allowFetch) return { data: cached, fromCache: !!cached, failed: !cached };
+  const fresh = !!cached && Date.now() - cached.fetchedAt < monthTtlMs(ym);
+  if (fresh && !opts.force) return { data: cached, fromCache: true, stale: false };
+  /* 冷却期或只读模式：不发网络（force 可穿透冷却） */
+  if (opts.cacheOnly || (networkCoolingDown() && !opts.force)) {
+    return { data: cached, fromCache: !!cached, stale: true, missing: !cached };
+  }
   try {
     return await fetchMonth(leagueId, ym);
   } catch (e) {
@@ -247,7 +300,44 @@ function mergeByLocalDay(eventsByLeague, dayKey) {
   return [...matches.values()].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
 }
 
-/* ---------- 对外：取某一天的赛程 ---------- */
+/* ---------- 对外：取某一天的赛程 ----------
+ * stale-while-revalidate：本地有缓存就立刻返回（哪怕过期），网络重验放后台，
+ * 刷新完成后通过 opts.onUpdate 回调新数据；完全无缓存时才等待网络。
+ * opts.force：强制联网取新（刷新按钮 / 直播轮询），此时同步等待结果
+ */
+async function collectView(dayKey, jobs, policy) {
+  const matches = new Map();
+  const leagueMeta = new Map();
+  const failed = [];
+  let fromCache = false;
+  let fetchedAt = 0;
+  let stale = false;
+
+  await mapLimit(jobs, 6, async ({ leagueId, ym }) => {
+    const r = await ensureMonth(leagueId, ym, policy);
+    if (r.stale) stale = true;
+    if (!r.data) {
+      failed.push(leagueId);
+      return;
+    }
+    if (r.fromCache) fromCache = true;
+    fetchedAt = Math.max(fetchedAt, r.data.fetchedAt);
+    leagueMeta.set(leagueId, r.data.league);
+    for (const m of r.data.events) {
+      if (dayKeyOf(new Date(m.start)) === dayKey) matches.set(m.id, m);
+    }
+  });
+
+  return {
+    dayKey,
+    matches: [...matches.values()].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0)),
+    leagueMeta,
+    failed: [...new Set(failed)],
+    fromCache,
+    fetchedAt: fetchedAt || null,
+    stale,
+  };
+}
 
 async function loadDay(dayKey, opts = {}) {
   const leagues = opts.leagues || DEFAULT_ENABLED;
@@ -256,32 +346,28 @@ async function loadDay(dayKey, opts = {}) {
     for (const ym of monthsForDay(dayKey)) jobs.push({ leagueId, ym });
   }
 
-  const failed = [];
-  let fromCache = false;
-  let fetchedAt = 0;
-  const leagueEvents = [];
-  const leagueMeta = new Map();
+  const instant = await collectView(dayKey, jobs, { cacheOnly: true, force: opts.force });
+  const needsNetwork = opts.force || instant.stale || !instant.fetchedAt;
+  if (!needsNetwork) return instant;
 
-  await mapLimit(jobs, 6, async ({ leagueId, ym }) => {
-    const r = await ensureMonth(leagueId, ym);
-    if (!r.data) {
-      failed.push(leagueId);
-      return;
-    }
-    if (r.fromCache) fromCache = true;
-    fetchedAt = Math.max(fetchedAt, r.data.fetchedAt);
-    leagueMeta.set(leagueId, r.data.league);
-    leagueEvents.push(r.data.events);
-  });
-
-  return {
-    dayKey,
-    matches: mergeByLocalDay(leagueEvents, dayKey),
-    leagueMeta,
-    failed: [...new Set(failed)],
-    fromCache,
-    fetchedAt: fetchedAt || null,
-  };
+  const refresh = () => collectView(dayKey, jobs, { force: opts.force });
+  if (instant.fetchedAt && !opts.force) {
+    refresh()
+      .then((fresh) => { if (opts.onUpdate) opts.onUpdate(fresh); })
+      .catch(() => { /* 后台刷新失败：保留缓存视图 */ });
+    return { ...instant, failed: [], pending: true };
+  }
+  /* 无缓存：限时等待网络，超时先返回“尚无数据”视图，抓取继续在后台完成 */
+  const deadline = opts.deadline ?? 25e3;
+  const bounded = await Promise.race([
+    refresh(),
+    new Promise((resolve) => setTimeout(() => resolve(null), deadline)),
+  ]);
+  if (bounded) return bounded;
+  refresh()
+    .then((fresh) => { if (opts.onUpdate) opts.onUpdate(fresh); })
+    .catch(() => { /* 后台刷新失败：保持当前视图 */ });
+  return { ...instant, failed: [], pending: true };
 }
 
 /* ---------- 对外：只读缓存，不发请求 ---------- */
@@ -298,36 +384,41 @@ function cachedDayMatches(dayKey, leagueIds) {
 }
 
 /* ---------- 对外：空日期时找最近的比赛日 ----------
- * 由近及远双向探测；每个月首次会真正抓取（受 maxMonths 预算约束），之后全走缓存。
- * opts.matchFilter：只认满足条件的比赛（如“含关注球队”），用于优先跳到关注球队的比赛日
+ * 一次由近及远双向扫描，同时给出全量与“关注球队”的最近比赛日；
+ * 月份首次会真正抓取（受 maxMonths 预算约束），之后全走缓存
  */
 async function findNearbyMatchdays(dayKey, opts = {}) {
   const leagues = opts.leagues || DEFAULT_ENABLED;
-  const matchFilter = opts.matchFilter || null;
+  const isFav = opts.isFav || null;
+  const favMaxDays = opts.favMaxDays ?? 60;
   const maxMonths = opts.maxMonths ?? 4;
-  const maxDays = opts.maxDays ?? 200;
-  const result = { prev: null, next: null };
+  const maxDays = opts.maxDays ?? 90;
+  const result = { prev: null, next: null, favPrev: null, favNext: null };
 
   for (const dir of [-1, 1]) {
+    const k = dir === 1 ? 'next' : 'prev';
+    const fk = dir === 1 ? 'favNext' : 'favPrev';
     let budget = maxMonths;
+    let failedWaves = 0;
     for (let step = 1; step <= maxDays; step++) {
       const cand = addDays(dayKey, dir * step);
-      const months = monthsForDay(cand);
-      let fetched = false;
-      for (const ym of months) {
+      for (const ym of monthsForDay(cand)) {
         const hasAll = leagues.every((id) => readCache(id, ym));
-        if (!hasAll && budget > 0) {
-          await mapLimit(leagues.map((leagueId) => ({ leagueId, ym })), 6, ({ leagueId }) => ensureMonth(leagueId, ym));
-          fetched = true;
-        }
+        if (hasAll || budget <= 0) continue;
+        budget--;
+        await mapLimit(leagues.map((leagueId) => ({ leagueId, ym })), 6, ({ leagueId }) => ensureMonth(leagueId, ym));
+        failedWaves = leagues.every((id) => readCache(id, ym)) ? 0 : failedWaves + 1;
       }
-      if (fetched) budget--;
+      /* 连续两个抓取波次颗粒无收 = 网络不可用，停止空转 */
+      if (failedWaves >= 2) break;
       const all = cachedDayMatches(cand, leagues);
-      const count = matchFilter ? all.filter(matchFilter).length : all.length;
-      if (count > 0) {
-        result[dir === 1 ? 'next' : 'prev'] = { dayKey: cand, count };
-        break;
+      if (!result[k] && all.length) result[k] = { dayKey: cand, count: all.length };
+      if (isFav && !result[fk] && step <= favMaxDays) {
+        const favN = all.reduce((n, m) => n + (isFav(m) ? 1 : 0), 0);
+        if (favN) result[fk] = { dayKey: cand, count: favN };
       }
+      /* 全量已找到，且（无需找关注 / 关注已找到 / 关注搜索超界）即收工 */
+      if (result[k] && (!isFav || result[fk] || step > favMaxDays)) break;
     }
   }
   return result;
