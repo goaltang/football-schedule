@@ -48,6 +48,13 @@ function leagueZh(leagueId) {
   return (LEAGUES.find((l) => l.id === leagueId) || {}).zh || '';
 }
 
+/* 队徽/联赛标走 ESPN 缩略图服务：500px 原图 130KB 且缓存仅 ~2h，
+   64px 缩略图约 6KB 且缓存 24h，显示尺寸只有 28px，没必要下原图 */
+function smallLogo(url) {
+  const m = /^https?:\/\/a\.espncdn\.com(\/.+)$/.exec(url || '');
+  return m ? `https://a.espncdn.com/combiner/i?img=${m[1]}&w=64&h=64` : url;
+}
+
 /* 关注球队：以归一化后的队名为身份，写法差异不影响命中 */
 function isFollowed(name) {
   return !!name && state.followed.has(normalizeTeamName(name));
@@ -184,7 +191,10 @@ function renderChips() {
 function matchRow(m, opts = {}) {
   const zh = (t) => esc(teamName(t));
   const en = (t) => esc((t && t.name) || '');
-  const logo = (t) => (t && t.logo ? `<img class="logo" src="${esc(t.logo)}" alt="" loading="lazy" onerror="this.classList.add('broken')">` : '<span class="logo ghost"></span>');
+  const logo = (t) => {
+    if (!t || !t.logo) return '<span class="logo ghost"></span>';
+    return `<img class="logo" src="${esc(smallLogo(t.logo))}" data-orig="${esc(t.logo)}" width="28" height="28" decoding="async" loading="lazy" alt="" onerror="if (this.dataset.retry) { this.classList.add('broken'); } else { this.dataset.retry = 1; this.src = this.dataset.orig; }">`;
+  };
   const star = (t) => `<button class="star${isFollowed(t && t.name) ? ' on' : ''}" data-star="${en(t)}" title="关注/取消关注">${isFollowed(t && t.name) ? '★' : '☆'}</button>`;
   const scorePart = (() => {
     if (m.status === 'SCHEDULED' || m.status === 'DELAYED' || m.status === 'POSTPONED') return '<span class="vs">vs</span>';
@@ -256,7 +266,7 @@ function renderList() {
       const ms = byLeague.get(lg.id);
       if (!ms || !ms.length) continue;
       const meta = d.leagueMeta.get(lg.id) || {};
-      const crest = meta.logo ? `<img class="crest" src="${esc(meta.logo)}" alt="" loading="lazy" onerror="this.remove()">` : '';
+      const crest = meta.logo ? `<img class="crest" src="${esc(smallLogo(meta.logo))}" data-orig="${esc(meta.logo)}" width="18" height="18" decoding="async" loading="lazy" alt="" onerror="if (this.dataset.retry) { this.remove(); } else { this.dataset.retry = 1; this.src = this.dataset.orig; }">` : '';
       parts.push(
         `<section class="league">` +
         `<header class="lg-head">${crest}<h2>${esc(lg.zh)}</h2><span class="lg-en">${esc(lg.en)}</span><span class="lg-count">${ms.length}场</span></header>` +
