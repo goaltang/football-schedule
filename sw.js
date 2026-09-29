@@ -1,9 +1,9 @@
-/* PWA 应用壳缓存：静态资源缓存优先，远程数据网络优先、失败回落缓存
+/* PWA 应用壳缓存：只缓存同源页面/静态资源；远程赛程交给 data.js 判断离线与过期
  * file:// 打开时不会注册（无 Service Worker），功能不受影响
  */
 'use strict';
 
-const CACHE = 'fs-shell-v1';
+const CACHE = 'football-schedule-shell-v4';
 const SHELL = [
   './',
   './index.html',
@@ -22,7 +22,9 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) =>
+        k !== CACHE && (k === 'fs-shell-v1' || k.startsWith('football-schedule-shell-v'))
+      ).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -48,15 +50,4 @@ self.addEventListener('fetch', (e) => {
     );
     return;
   }
-
-  /* 远程赛程数据：网络优先，失败回落缓存 */
-  e.respondWith(
-    fetch(req)
-      .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(req, copy));
-        return res;
-      })
-      .catch(() => caches.match(req))
-  );
 });

@@ -272,7 +272,7 @@ async function ensureMonth(leagueId, ym, opts = {}) {
   try {
     return await fetchMonth(leagueId, ym);
   } catch (e) {
-    return { data: cached, fromCache: !!cached, failed: !cached };
+    return { data: cached, fromCache: !!cached, stale: !!cached, failed: !cached };
   }
 }
 
@@ -308,7 +308,7 @@ function mergeByLocalDay(eventsByLeague, dayKey) {
 async function collectView(dayKey, jobs, policy) {
   const matches = new Map();
   const leagueMeta = new Map();
-  const failed = [];
+  const missing = new Set();
   let fromCache = false;
   let fetchedAt = 0;
   let stale = false;
@@ -317,7 +317,7 @@ async function collectView(dayKey, jobs, policy) {
     const r = await ensureMonth(leagueId, ym, policy);
     if (r.stale) stale = true;
     if (!r.data) {
-      failed.push(leagueId);
+      missing.add(leagueId);
       return;
     }
     if (r.fromCache) fromCache = true;
@@ -332,7 +332,7 @@ async function collectView(dayKey, jobs, policy) {
     dayKey,
     matches: [...matches.values()].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0)),
     leagueMeta,
-    failed: [...new Set(failed)],
+    failed: [...missing],
     fromCache,
     fetchedAt: fetchedAt || null,
     stale,
@@ -359,12 +359,13 @@ async function loadDay(dayKey, opts = {}) {
   }
   /* 无缓存：限时等待网络，超时先返回“尚无数据”视图，抓取继续在后台完成 */
   const deadline = opts.deadline ?? 25e3;
+  const pending = refresh();
   const bounded = await Promise.race([
-    refresh(),
+    pending,
     new Promise((resolve) => setTimeout(() => resolve(null), deadline)),
   ]);
   if (bounded) return bounded;
-  refresh()
+  pending
     .then((fresh) => { if (opts.onUpdate) opts.onUpdate(fresh); })
     .catch(() => { /* 后台刷新失败：保持当前视图 */ });
   return { ...instant, failed: [], pending: true };
@@ -385,7 +386,8 @@ function cachedDayMatches(dayKey, leagueIds) {
 
 /* ---------- 对外：空日期时找最近的比赛日 ----------
  * 一次由近及远双向扫描，同时给出全量与“关注球队”的最近比赛日；
- * 月份首次会真正抓取（受 maxMonths 预算约束），之后全走缓存
+ * 缺失月份各只尝试一次抓取（受 maxMonths 与熔断约束），失败后仍扫描已有缓存；
+ * 跨过数据不完整的月份所找到的候选仅代表缓存范围内最近。
  */
 async function findNearbyMatchdays(dayKey, opts = {}) {
   const leagues = opts.leagues || DEFAULT_ENABLED;
@@ -395,27 +397,31 @@ async function findNearbyMatchdays(dayKey, opts = {}) {
   const maxDays = opts.maxDays ?? 90;
   const result = { prev: null, next: null, favPrev: null, favNext: null };
 
+  const attemptedMonths = new Set();
   for (const dir of [-1, 1]) {
     const k = dir === 1 ? 'next' : 'prev';
     const fk = dir === 1 ? 'favNext' : 'favPrev';
     let budget = maxMonths;
     let failedWaves = 0;
+    let partial = false;
     for (let step = 1; step <= maxDays; step++) {
       const cand = addDays(dayKey, dir * step);
       for (const ym of monthsForDay(cand)) {
-        const hasAll = leagues.every((id) => readCache(id, ym));
-        if (hasAll || budget <= 0) continue;
-        budget--;
-        await mapLimit(leagues.map((leagueId) => ({ leagueId, ym })), 6, ({ leagueId }) => ensureMonth(leagueId, ym));
-        failedWaves = leagues.every((id) => readCache(id, ym)) ? 0 : failedWaves + 1;
+        const missingLeagues = leagues.filter((id) => !readCache(id, ym));
+        if (missingLeagues.length && budget > 0 && failedWaves < 2 && !attemptedMonths.has(ym)) {
+          attemptedMonths.add(ym);
+          budget--;
+          await mapLimit(missingLeagues, 6, (leagueId) => ensureMonth(leagueId, ym));
+          failedWaves = missingLeagues.some((id) => readCache(id, ym)) ? 0 : failedWaves + 1;
+        }
+        if (leagues.some((id) => !readCache(id, ym))) partial = true;
       }
-      /* 连续两个抓取波次颗粒无收 = 网络不可用，停止空转 */
-      if (failedWaves >= 2) break;
+      /* 网络失败只停止后续抓取；仍须扫描已缓存的远处月份 */
       const all = cachedDayMatches(cand, leagues);
-      if (!result[k] && all.length) result[k] = { dayKey: cand, count: all.length };
+      if (!result[k] && all.length) result[k] = { dayKey: cand, count: all.length, ...(partial ? { partial: true } : {}) };
       if (isFav && !result[fk] && step <= favMaxDays) {
         const favN = all.reduce((n, m) => n + (isFav(m) ? 1 : 0), 0);
-        if (favN) result[fk] = { dayKey: cand, count: favN };
+        if (favN) result[fk] = { dayKey: cand, count: favN, ...(partial ? { partial: true } : {}) };
       }
       /* 全量已找到，且（无需找关注 / 关注已找到 / 关注搜索超界）即收工 */
       if (result[k] && (!isFav || result[fk] || step > favMaxDays)) break;
