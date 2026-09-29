@@ -231,6 +231,30 @@ function followedLeagues() {
   return [...out];
 }
 
+/* 关注球队可能在已关闭的联赛里比赛：抓取范围 = 启用联赛 ∪ 关注球队所在联赛；
+ * 展示时关闭联赛只保留关注球队的比赛（进“我的关注”，不出现在联赛分组） */
+function fetchLeagues() {
+  return [...new Set([...state.enabled, ...followedLeagues()])];
+}
+
+function matchVisible(m) {
+  return !!m && (state.enabled.has(m.league) || matchHasFollowed(m));
+}
+
+function visibleDay(r) {
+  return r && r.matches ? { ...r, matches: r.matches.filter(matchVisible) } : r;
+}
+
+async function loadDayVisible(dayKey, opts = {}) {
+  const { onUpdate, ...rest } = opts;
+  const r = await loadDay(dayKey, {
+    ...rest,
+    leagues: fetchLeagues(),
+    onUpdate: onUpdate ? (fresh) => onUpdate(visibleDay(fresh)) : undefined,
+  });
+  return visibleDay(r);
+}
+
 /* 观察到比赛时补全档案：写 ID/名字/别名/联赛，合并同 ID 重复项；只在数据路径调用 */
 function enrichFollowedFromMatches(matches) {
   if (!state.followed.length || !matches || !matches.length) return false;
@@ -423,7 +447,7 @@ const DAY_DOT_TEXT = {
 };
 
 function dayDotState(dayKey) {
-  const ms = cachedDayMatches(dayKey, [...state.enabled]);
+  const ms = cachedDayMatches(dayKey, fetchLeagues()).filter(matchVisible);
   if (ms.some(matchHasFollowed)) return 'fill';
   if (ms.length) return 'hollow';
   const months = monthsForDay(dayKey);
@@ -500,8 +524,27 @@ function countdownText(startIso, nowMs) {
 
 /* 每分钟一次：原地刷新倒计时（不重绘列表）；面板展开时同步推进“已缓存下一场”
    ——越过开赛点后重算该提示，只重绘 #followTeams，不碰列表、不联网 */
+/* 已过开赛时间却仍是“未开赛”的比赛（页面在赛前打开并放置）：需要强制刷新才能进入直播。
+   只看开赛后 3 小时内，延期/未更新的比赛不会永远轮询。 */
+const KICKOFF_GRACE_MS = 3 * 3600e3;
+
+function kickoffPassed() {
+  const now = Date.now();
+  return currentMatches().some((m) => {
+    if (!m || m.status !== 'SCHEDULED') return false;
+    const t = new Date(m.start).getTime();
+    return Number.isFinite(t) && t <= now && now - t < KICKOFF_GRACE_MS;
+  });
+}
+
+function refreshIfKickoffPassed() {
+  if (document.hidden || state.loading || !kickoffPassed()) return;
+  reload({ force: true });
+}
+
 function minuteTick() {
   updateCountdowns();
+  refreshIfKickoffPassed();
   const panel = $('#followManager');
   if (panel && !panel.hasAttribute('hidden')) {
     invalidateFollowNext();
@@ -596,8 +639,18 @@ function renderWeek() {
     return;
   }
   const parts = [];
+  const dayIncomplete = (d) => !!(d.error || (d.failed && d.failed.length) || d.stale || d.pending);
   for (const d of days) {
-    if (!d.matches.length) continue;
+    if (!d.matches.length) {
+      if (dayIncomplete(d)) {
+        parts.push(
+          `<section class="wday" id="wday-${d.dayKey}">` +
+          `<h3 class="wday-head"><b>${md(parseDayKey(d.dayKey))}</b> ${esc(weekdayOf(d.dayKey))} · 数据不完整，无法确认是否有比赛</h3>` +
+          `</section>`
+        );
+      }
+      continue;
+    }
     const dt = parseDayKey(d.dayKey);
     const rel = relativeLabel(d.dayKey);
     const f = d.matches.filter(matchHasFollowed).length;
@@ -610,7 +663,9 @@ function renderWeek() {
       `</section>`
     );
   }
-  if (!parts.length) {
+  if (incomplete) {
+    parts.push(`<div class="empty-day"><p>${all.length ? '部分日期数据不完整' : '本周赛程数据不可用或不完整'}</p><p class="sub">暂时无法确认这一周是否有比赛，可重试。</p><button class="btn" id="retry">重试</button></div>`);
+  } else if (!all.length) {
     parts.push(`<div class="empty-day"><p>这一周没有赛程</p><p class="sub">日期条上的圆点表示哪天有球</p></div>`);
   }
   root.innerHTML = parts.join('');
@@ -686,6 +741,7 @@ function renderList() {
     }
     const byLeague = new Map();
     for (const m of d.matches) {
+      if (!state.enabled.has(m.league)) continue; /* 关闭联赛里的关注比赛只出现在“我的关注” */
       if (!byLeague.has(m.league)) byLeague.set(m.league, []);
       byLeague.get(m.league).push(m);
     }
@@ -930,8 +986,7 @@ async function reload(opts = {}) {
   state.error = null;
   renderList();
   try {
-    const data = await loadDay(state.dayKey, {
-      leagues: [...state.enabled],
+    const data = await loadDayVisible(state.dayKey, {
       force: opts.force,
       onUpdate: (fresh) => {
         /* 后台重验完成：静默替换为新数据 */
@@ -969,22 +1024,41 @@ async function reload(opts = {}) {
 /* 周视图加载：并行取窗口内 7 天（数据层“联赛×月”缓存共享），单天失败不影响整周 */
 async function reloadWeek(opts = {}) {
   const seq = ++loadSeq;
+  const earlyUpdates = new Map();
+  let committed = false;
   state.loading = true;
   state.error = null;
   render();
-  const leagues = [...state.enabled];
   const keys = Array.from({ length: STRIP_LEN }, (_, i) => addDays(state.windowStart, i));
   try {
     const days = await mapLimit(keys, 3, async (key) => {
       try {
-        const d = await loadDay(key, { leagues, force: opts.force });
+        const d = await loadDayVisible(key, {
+          force: opts.force,
+          onUpdate: (fresh) => {
+            /* 后台重验完成：把该天替换为新数据 */
+            if (seq !== loadSeq || state.view !== 'week') return;
+            const updated = { dayKey: key, matches: fresh.matches, failed: fresh.failed, stale: fresh.stale, pending: fresh.pending };
+            if (!committed) {
+              earlyUpdates.set(key, updated);
+              return;
+            }
+            const i = state.weekDays.findIndex((x) => x.dayKey === key);
+            if (i < 0) return;
+            state.weekDays[i] = updated;
+            enrichFollowedFromMatches(fresh.matches);
+            invalidateFollowNext();
+            render();
+          },
+        });
         return { dayKey: key, matches: d.matches, failed: d.failed, stale: d.stale, pending: d.pending };
       } catch (e) {
         return { dayKey: key, matches: [], failed: ['*'], error: true };
       }
     });
     if (seq !== loadSeq) return;
-    state.weekDays = days;
+    state.weekDays = days.map((day) => earlyUpdates.get(day.dayKey) || day);
+    committed = true;
     enrichFollowedFromMatches(days.flatMap((d) => d.matches));
     invalidateFollowNext();
     state.loading = false;
@@ -1023,7 +1097,7 @@ function warmStripMonths() {
   for (let i = 0; i < STRIP_LEN; i++) {
     const key = addDays(state.windowStart, i);
     for (const ym of monthsForDay(key)) {
-      for (const lg of state.enabled) pairs.add(`${lg}|${ym}`);
+      for (const lg of fetchLeagues()) pairs.add(`${lg}|${ym}`);
     }
   }
   const list = [...pairs].filter((pair) => !stripWarmFailed.has(pair));
@@ -1289,7 +1363,7 @@ function bind() {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       clearTimeout(liveTimer);
-    } else if (currentMatches().some((m) => m.live)) {
+    } else if (currentMatches().some((m) => m.live) || kickoffPassed()) {
       reload({ force: true });
     }
   });

@@ -879,6 +879,48 @@ test('week view groups by day, skips empty days, marks followed', async () => {
   assert.equal(h.call('currentMatches().length'), 3);
 });
 
+test('week view keeps incomplete days distinct from a confirmed empty week', () => {
+  const h = harness([], true);
+  h.call(`state.view = 'week'; state.windowStart = '2026-09-21';
+    state.weekDays = [{ dayKey: '2026-09-22', matches: [], pending: true }]; render()`);
+  const html = h.elements['#list'].innerHTML;
+  assert.match(html, /数据不完整，无法确认是否有比赛/);
+  assert.match(html, /重试/);
+  assert.doesNotMatch(html, /这一周没有赛程/);
+});
+
+test('week view applies a background update received before the initial week completes', async () => {
+  const h = harness([], true);
+  h.context.freshMatch = match('fresh', 'eng.1', 21);
+  h.call(`state.view = 'week'; state.windowStart = '2026-09-21';
+    loadDayVisible = async (key, opts) => {
+      if (key === '2026-09-21') opts.onUpdate({ matches: [freshMatch], failed: [], stale: false, pending: false });
+      return { matches: [], failed: [], stale: false, pending: true };
+    }`);
+  await h.call('reloadWeek()');
+  assert.equal(h.call("state.weekDays[0].matches[0]?.id"), 'fresh');
+  assert.equal(h.call('state.weekDays[0].pending'), false);
+});
+
+test('followed matches remain visible when their league is disabled', async () => {
+  const h = harness([['fs1.enabled', '["eng.1"]']], true);
+  h.call("toggleFollow({ name: 'Home', teamId: '42', league: 'esp.1' })");
+  h.context.fixtures = [match('followed', 'esp.1', 22, '42'), match('other', 'esp.1', 22, '77')];
+  h.context.fixtures[1].home.name = 'Different';
+  const ids = h.call('fixtures.filter(matchVisible).map((m) => m.id)');
+  assert.deepEqual([...ids], ['followed']);
+  assert.ok([...h.call('fetchLeagues()')].includes('esp.1'));
+});
+
+test('minute tick requests a refresh after a scheduled kickoff passes', () => {
+  const h = harness([], true);
+  h.context.fixture = match('kickoff', 'eng.1', 22);
+  h.call('state.data = { matches: [fixture] }; state.view = "day"; state.loading = false; refreshCalls = 0; reload = () => { refreshCalls++ }');
+  h.advance(new Date(h.context.fixture.start).getTime() - Date.now() + 60_000);
+  h.call('minuteTick()');
+  assert.equal(h.call('refreshCalls'), 1);
+});
+
 test('buildIcs 生成合法 iCalendar：转义、VALARM、行折叠', () => {
   const h = harness([], true);
   const m = match('evt-1', 'eng.1', 28);
