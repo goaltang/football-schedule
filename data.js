@@ -371,6 +371,20 @@ async function loadDay(dayKey, opts = {}) {
   return { ...instant, failed: [], pending: true };
 }
 
+/* 只读缓存：找出关注球队所在的联赛（日历导出用；只扫本地缓存，不发请求） */
+function cachedLeaguesOfFollowed(isFav) {
+  const leagues = new Set();
+  for (let i = 0; i < storage.length; i++) {
+    const parts = (storage.key(i) || '').split('|');
+    if (parts.length !== 4 || parts[0] !== CACHE_PREFIX.slice(0, -1) || parts[1] !== 'm') continue;
+    const [, , leagueId, ym] = parts;
+    if (leagues.has(leagueId)) continue;
+    const entry = readCache(leagueId, ym);
+    if (entry && Array.isArray(entry.events) && entry.events.some(isFav)) leagues.add(leagueId);
+  }
+  return [...leagues];
+}
+
 /* ---------- 对外：只读缓存，不发请求 ---------- */
 
 function cachedDayMatches(dayKey, leagueIds) {

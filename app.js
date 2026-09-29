@@ -269,6 +269,31 @@ function renderChips() {
   }
 }
 
+/* 开赛倒计时：未开赛的比赛显示“N 分钟后 / N 小时后 / N 天后”，7 天以上不显示 */
+function countdownText(startIso, nowMs) {
+  const diff = new Date(startIso).getTime() - nowMs;
+  if (!Number.isFinite(diff) || diff <= 0) return '';
+  if (diff < 3600000) return `${Math.max(1, Math.floor(diff / 60000))} 分钟后`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时后`;
+  if (diff < 7 * 86400000) return `${Math.floor(diff / 86400000)} 天后`;
+  return '';
+}
+
+/* 每分钟原地刷新倒计时文本，不重绘列表（setTimeout 链：测试环境对长延时定时器不触发） */
+function scheduleCountdownTick() {
+  setTimeout(() => {
+    updateCountdowns();
+    scheduleCountdownTick();
+  }, 60000);
+}
+
+function updateCountdowns(root) {
+  const nodes = (root || document).querySelectorAll('.cd');
+  for (const node of nodes) {
+    node.textContent = countdownText(node.dataset.kick, Date.now()) || node.dataset.fallback || '';
+  }
+}
+
 function matchRow(m, opts = {}) {
   const zh = (t) => esc(teamName(t));
   const en = (t) => esc((t && t.name) || '');
@@ -291,7 +316,12 @@ function matchRow(m, opts = {}) {
   const statusPart = (() => {
     if (m.status === 'LIVE') return `<span class="dot"></span>${esc(m.minute || '直播')}`;
     if (m.status === 'FT') return `完场${m.detail && m.detail !== 'FT' ? ' ' + esc(m.detail) : ''}`;
-    return STATUS_LABEL[m.status] || m.status;
+    const fallback = STATUS_LABEL[m.status] || m.status;
+    if (m.status === 'SCHEDULED') {
+      const cd = countdownText(m.start, Date.now());
+      return `<span class="cd" data-kick="${esc(m.start)}" data-fallback="${esc(fallback)}">${esc(cd || fallback)}</span>`;
+    }
+    return fallback;
   })();
   return (
     `<div class="match st-${m.status}">` +
@@ -509,6 +539,7 @@ async function reload(opts = {}) {
     return;
   }
   scheduleLivePoll();
+  schedulePrefetch();
 }
 
 function scheduleLivePoll() {
@@ -516,6 +547,19 @@ function scheduleLivePoll() {
   if (document.hidden) return;
   const hasLive = state.data && state.data.matches.some((m) => m.live);
   if (hasLive) liveTimer = setTimeout(() => reload({ force: true }), LIVE_POLL_MS);
+}
+
+/* 预取前后相邻日期：数据层按“联赛×月”缓存，这里只是暖机，切日瞬间出数据 */
+let prefetchTimer = null;
+function schedulePrefetch() {
+  clearTimeout(prefetchTimer);
+  prefetchTimer = setTimeout(() => {
+    if (document.hidden) return;
+    const leagues = [...state.enabled];
+    for (const key of [addDays(state.dayKey, -1), addDays(state.dayKey, 1)]) {
+      loadDay(key, { leagues }).catch(() => {});
+    }
+  }, 1500);
 }
 
 function gotoDay(dayKey) {
@@ -527,6 +571,130 @@ function gotoDay(dayKey) {
   state.data = null;
   render();
   reload();
+}
+
+/* ---------- 日历导出（.ics） ----------
+ * 把关注球队的未来赛程生成 iCalendar 文件供手机日历导入，事件自带开赛前 15 分钟提醒。
+ * 纯前端生成，不上传任何数据；只按“关注球队所在联赛 × 未来两个月”拉数据，成本个位数请求。
+ */
+const ICS_DAYS = 60;
+const ICS_MATCH_SPAN_MS = 2 * 3600 * 1000;
+let exportingIcs = false;
+
+function icsEsc(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+}
+
+function icsTime(date) {
+  return new Date(date).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+
+/* RFC 5545 行折叠：每行 ≤75 字节（UTF-8），续行以空格开头，不切断多字节字符 */
+function foldIcsLine(line) {
+  const enc = new TextEncoder();
+  const out = [];
+  let cur = '';
+  let curBytes = 0;
+  for (const ch of line) {
+    const b = enc.encode(ch).length;
+    if (curBytes + b > 75) {
+      out.push(cur);
+      cur = ' ';
+      curBytes = 1;
+    }
+    cur += ch;
+    curBytes += b;
+  }
+  out.push(cur);
+  return out.join('\r\n');
+}
+
+function buildIcs(matches, opts = {}) {
+  const now = icsTime(new Date());
+  const title = opts.title || '足球赛程';
+  const tz = (typeof Intl !== 'undefined' && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'UTC';
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'CALSCALE:GREGORIAN',
+    'PRODID:-//football-schedule//fixtures//ZH',
+    `X-WR-CALNAME:${icsEsc(title)}`,
+    `X-WR-TIMEZONE:${icsEsc(tz)}`,
+  ];
+  for (const m of matches) {
+    const summary = `⚽ ${teamName(m.home)} vs ${teamName(m.away)}（${leagueZh(m.league)}）`;
+    const desc = `${leagueZh(m.league)} · ${teamName(m.home)} vs ${teamName(m.away)}`;
+    lines.push(
+      'BEGIN:VEVENT',
+      `UID:${icsEsc(m.id)}@football-schedule`,
+      `DTSTAMP:${now}`,
+      `DTSTART:${icsTime(m.start)}`,
+      `DTEND:${icsTime(new Date(new Date(m.start).getTime() + ICS_MATCH_SPAN_MS))}`,
+      `SUMMARY:${icsEsc(summary)}`,
+      `DESCRIPTION:${icsEsc(desc)}`,
+      'BEGIN:VALARM',
+      'TRIGGER:-PT15M',
+      'ACTION:DISPLAY',
+      `DESCRIPTION:${icsEsc(summary)}`,
+      'END:VALARM',
+      'END:VEVENT',
+    );
+  }
+  lines.push('END:VCALENDAR');
+  return lines.map(foldIcsLine).join('\r\n') + '\r\n';
+}
+
+async function exportCalendar() {
+  if (exportingIcs) return;
+  const btn = $('#exportIcs');
+  const note = $('#icsNote');
+  if (!state.followed.size) {
+    if (note) note.textContent = '先点 ☆ 关注球队，再来导出';
+    return;
+  }
+  exportingIcs = true;
+  if (btn) btn.disabled = true;
+  try {
+    if (note) note.textContent = '正在收集赛程…';
+    /* 只取关注球队所在联赛（缓存里出现过的），找不到再回落全部启用联赛 */
+    let leagues = cachedLeaguesOfFollowed(matchHasFollowed);
+    if (!leagues.length) leagues = [...state.enabled];
+    const todayKey = dayKeyOf(new Date());
+    const yms = new Set();
+    for (let i = 0; i < ICS_DAYS; i++) {
+      for (const ym of monthsForDay(addDays(todayKey, i))) yms.add(ym);
+    }
+    const jobs = [];
+    for (const leagueId of leagues) for (const ym of yms) jobs.push({ leagueId, ym });
+    const now = Date.now();
+    const picked = new Map();
+    await mapLimit(jobs, 6, async ({ leagueId, ym }) => {
+      const r = await ensureMonth(leagueId, ym);
+      for (const m of (r.data && r.data.events) || []) {
+        if (new Date(m.start).getTime() > now && matchHasFollowed(m)) picked.set(m.id, m);
+      }
+    });
+    const rows = [...picked.values()].sort((a, b) => (a.start < b.start ? -1 : 1));
+    if (!rows.length) {
+      if (note) note.textContent = `未来 ${ICS_DAYS} 天没有关注球队的赛程`;
+      return;
+    }
+    const blob = new Blob([buildIcs(rows, { title: '足球赛程 · 我的关注' })], { type: 'text/calendar;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'fixtures-followed.ics';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    if (note) note.textContent = `已导出 ${rows.length} 场（开赛前 15 分钟提醒）`;
+  } catch (e) {
+    if (note) note.textContent = '导出失败：' + ((e && e.message) || '未知错误');
+  } finally {
+    exportingIcs = false;
+    if (btn) btn.disabled = false;
+  }
 }
 
 /* ---------- 事件绑定 ---------- */
@@ -568,6 +736,8 @@ function bind() {
     if (e.target.id === 'retry') reload({ force: true });
   });
   $('#refresh').addEventListener('click', () => reload({ force: true }));
+  $('#exportIcs') && $('#exportIcs').addEventListener('click', exportCalendar);
+  scheduleCountdownTick();
   /* 标签页隐藏时停掉直播轮询，切回前台立即补一次 */
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {

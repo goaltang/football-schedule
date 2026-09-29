@@ -36,6 +36,7 @@ function harness(entries = [], withApp = false) {
     window: { localStorage: storage },
     localStorage: storage,
     AbortController,
+    TextEncoder,
     fetch: async () => { attempts++; throw new Error('offline'); },
     setTimeout: (fn, ms) => ms >= 15000 ? null : setImmediate(fn),
     clearTimeout: (id) => clearImmediate(id),
@@ -179,4 +180,37 @@ test('Eastern-date rollover covers the adjacent monthly bucket', () => {
   const h = harness();
   assert.equal(h.call("etBucketOf(new Date('2026-10-01T01:00:00Z'))"), '20260930');
   assert.equal(h.call("etBucketOf(new Date('2026-10-01T12:00:00Z'))"), '20261001');
+});
+
+test('countdownText 分档与边界', () => {
+  const h = harness([], true);
+  const base = Date.parse('2026-10-01T12:00:00Z');
+  const at = (iso) => h.call(`countdownText('${iso}', ${base})`);
+  assert.equal(at('2026-10-01T12:00:30Z'), '1 分钟后');
+  assert.equal(at('2026-10-01T12:30:00Z'), '30 分钟后');
+  assert.equal(at('2026-10-01T15:00:00Z'), '3 小时后');
+  assert.equal(at('2026-10-02T11:59:00Z'), '23 小时后');
+  assert.equal(at('2026-10-02T12:00:00Z'), '1 天后');
+  assert.equal(at('2026-10-07T11:59:00Z'), '5 天后');
+  assert.equal(at('2026-10-08T12:00:00Z'), '');
+  assert.equal(at('2026-10-01T11:59:00Z'), '');
+});
+
+test('buildIcs 生成合法 iCalendar：转义、VALARM、行折叠', () => {
+  const h = harness([], true);
+  const m = match('evt-1', 'eng.1', 28);
+  m.home.name = 'A, B; C';
+  h.context.fixture = m;
+  const ics = h.call("buildIcs([fixture], { title: 'T' })");
+  assert.ok(ics.includes('BEGIN:VCALENDAR'));
+  assert.ok(ics.includes('BEGIN:VEVENT'));
+  assert.ok(ics.includes('UID:evt-1@football-schedule'));
+  assert.ok(ics.includes(`DTSTART:${new Date(m.start).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}`));
+  assert.ok(ics.includes('TRIGGER:-PT15M'));
+  assert.ok(ics.includes('ACTION:DISPLAY'));
+  assert.ok(ics.includes('A\\, B\\; C'));
+  assert.ok(ics.endsWith('END:VCALENDAR\r\n'));
+  for (const line of ics.split('\r\n')) {
+    if (line) assert.ok(Buffer.byteLength(line, 'utf8') <= 75, `line too long: ${line}`);
+  }
 });
