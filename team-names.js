@@ -112,6 +112,18 @@ const TEAM_ZH = {
   'Kairat Almaty': '阿拉木图凯拉特', 'Braga': '布拉加', 'Omonia': '尼科西亚奥莫尼亚', 'Sint-Truidense': '圣图尔登',
 };
 
+/* 搜索用的常用简称/昵称（key 为 TEAM_ZH 里的中文名）：中文名与英文名已能搜到，这里只补口语叫法 */
+const TEAM_SEARCH_ALIASES = {
+  '皇家马德里': ['皇马', 'Real'], '巴塞罗那': ['巴萨', '巴塞', 'Barca'], '马德里竞技': ['马竞', 'Atleti'],
+  '曼城': ['蓝月亮', 'Man City'], '曼联': ['红魔', 'Man United', 'Man Utd'], '利物浦': ['红军'],
+  '阿森纳': ['枪手'], '切尔西': ['蓝军'], '热刺': ['托特纳姆', 'Spurs'], '纽卡斯尔': ['喜鹊', 'Newcastle'],
+  '西汉姆联': ['西汉姆', 'West Ham'], '狼队': ['狼', 'Wolves'], '国际米兰': ['国米', 'Inter'],
+  'AC米兰': ['米兰', 'Milan', 'ACM'], '尤文图斯': ['尤文', '老妇人', 'Juve'], '那不勒斯': ['拿破仑'],
+  '拜仁慕尼黑': ['拜仁', 'Bayern'], '多特蒙德': ['多特', 'BVB'], '勒沃库森': ['药厂', 'Leverkusen'],
+  '巴黎圣日耳曼': ['巴黎', '大巴黎', 'PSG'], '毕尔巴鄂竞技': ['毕尔巴鄂'], '皇家贝蒂斯': ['贝蒂斯'],
+  '北京国安': ['国安'], '上海申花': ['申花'], '上海海港': ['海港', '上港'], '山东泰山': ['泰山'],
+};
+
 /* 名称归一化：忽略大小写、音调、标点、FC/AS/SK 之类的俱乐部前后缀，
  * 让 "1. FC Union Berlin" 与 "Union Berlin"、"Atlético" 与 "Atletico" 命中同一条 */
 const ZH_PREFIX = /^(fc|afc|cf|cd|sc|ac|as|ss|us|rc|rcd|aj|sk|nk|tsg|sv|vfl|vfb|bsc|1fc)/;

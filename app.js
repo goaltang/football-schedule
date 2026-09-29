@@ -305,7 +305,8 @@ function toggleFollow(team) {
     /* 只移除与该队匹配的档案，不碰无关关注 */
     state.followed = state.followed.filter((rec) => !recordMatches(rec, team));
   } else {
-    state.followed.push(mkFollowRecord(tid, name, name ? nameKeys(team) : [], team.league ? [team.league] : []));
+    const leagues = team.leagues || (team.league ? [team.league] : []);
+    state.followed.push(mkFollowRecord(tid, name, name ? nameKeys(team) : [], leagues));
   }
   followChanged();
 }
@@ -319,6 +320,146 @@ function unfollowAt(idx) {
   if (active && active.dataset && active.dataset.followIdx === String(idx)) pendingFollowFocus = idx;
   state.followed.splice(idx, 1);
   followChanged();
+}
+
+/* ---------- 球队搜索 ----------
+ * 名单来自各联赛 `/teams`（data.js 缓存 7 天），按球队 ID 合并：一支球队出现在联赛与欧战里只算一条，
+ * leagues 记下它所在的全部联赛——关注后 fetchLeagues 才会去抓它在已关闭联赛里的比赛。
+ * 匹配面：中文名、英文全名/简称、常用简称（TEAM_SEARCH_ALIASES）。 */
+const SEARCH_LIMIT = 8;
+const search = { query: '', catalog: [], loading: false, loaded: false, failed: 0 };
+
+function searchKey(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '');
+}
+
+function buildCatalog(perLeague) {
+  const byId = new Map();
+  for (const { leagueId, teams } of perLeague) {
+    for (const t of teams) {
+      let e = byId.get(t.id);
+      if (!e) {
+        const zh = zhName(t.name);
+        e = {
+          id: t.id, name: t.name, zh, logo: t.logo, leagues: [],
+          keys: [zh, t.name, t.short, ...(TEAM_SEARCH_ALIASES[zh] || [])].map(searchKey).filter(Boolean),
+        };
+        byId.set(t.id, e);
+      }
+      if (!e.leagues.includes(leagueId)) e.leagues.push(leagueId);
+    }
+  }
+  return [...byId.values()];
+}
+
+/* 0 = 整词相同，1 = 前缀，2 = 包含；无命中返回 -1 */
+function searchScore(entry, q) {
+  let best = -1;
+  for (const k of entry.keys) {
+    const at = k.indexOf(q);
+    if (at < 0) continue;
+    const sc = at === 0 ? (k.length === q.length ? 0 : 1) : 2;
+    if (best < 0 || sc < best) best = sc;
+  }
+  return best;
+}
+
+function searchTeams(catalog, query) {
+  const q = searchKey(query);
+  if (!q) return [];
+  return catalog
+    .map((e) => ({ e, sc: searchScore(e, q) }))
+    .filter((r) => r.sc >= 0)
+    .sort((a, b) => (a.sc - b.sc) || a.e.zh.localeCompare(b.e.zh, 'zh'))
+    .map((r) => r.e);
+}
+
+let catalogPromise = null;
+
+/* 首次聚焦/输入时才拉名单；每个联赛到达就刷新一次结果，慢联赛不挡住已到的。
+   全部失败时清掉 promise，下次聚焦可重试 */
+function loadCatalog() {
+  if (search.loaded || catalogPromise) return catalogPromise;
+  search.loading = true;
+  search.failed = 0;
+  const perLeague = [];
+  catalogPromise = mapLimit(LEAGUES, 4, async (lg) => {
+    const r = await ensureTeams(lg.id);
+    if (r.failed) search.failed++;
+    perLeague.push({ leagueId: lg.id, teams: r.teams, order: LEAGUES.indexOf(lg) });
+    perLeague.sort((a, b) => a.order - b.order);
+    search.catalog = buildCatalog(perLeague);
+    renderSearch();
+  }).then(() => {
+    search.loading = false;
+    search.loaded = search.failed < LEAGUES.length;
+    if (!search.loaded) catalogPromise = null;
+    renderSearch();
+  });
+  return catalogPromise;
+}
+
+function searchLeaguesText(entry) {
+  return entry.leagues.map((id) => leagueZh(id) || id).join(' · ');
+}
+
+function renderSearch() {
+  const host = $('#followResults');
+  if (!host) return;
+  const q = searchKey(search.query);
+  if (!q) {
+    host.innerHTML = '';
+    return;
+  }
+  const active = document.activeElement;
+  const restoreId = active && active.closest && active.closest('#followResults') && active.dataset
+    ? active.dataset.searchId : null;
+  const hits = searchTeams(search.catalog, search.query);
+  const rows = hits.slice(0, SEARCH_LIMIT).map((e) => {
+    const on = isFollowed({ name: e.name, teamId: e.id });
+    const en = e.zh !== e.name ? `<span class="search-en">${esc(e.name)}</span>` : '';
+    return (
+      `<div class="search-row">` +
+      logoImg({ teamId: e.id, logo: e.logo }, 24) +
+      `<span class="search-name">${esc(e.zh)}${en}</span>` +
+      `<span class="search-meta">${esc(searchLeaguesText(e))}</span>` +
+      `<button type="button" class="search-add" data-search-id="${esc(e.id)}" aria-pressed="${on}" ` +
+      `aria-label="${esc((on ? '取消关注 ' : '关注 ') + e.zh)}">${on ? '已关注' : '关注'}</button>` +
+      `</div>`
+    );
+  });
+  let note = '';
+  if (!hits.length) {
+    if (search.loading) note = '正在加载球队名单…';
+    else if (!search.catalog.length) note = '球队名单暂时无法加载，请检查网络后再试。';
+    else note = `没有找到「${esc(search.query.trim())}」；只收录已配置联赛的球队。`;
+  } else if (hits.length > SEARCH_LIMIT) {
+    note = `还有 ${hits.length - SEARCH_LIMIT} 支，请输入更多字缩小范围`;
+  } else if (search.loading) {
+    note = '名单仍在加载，结果可能不全…';
+  } else if (search.failed) {
+    note = '部分联赛名单未能加载，结果可能不全。';
+  }
+  host.innerHTML = rows.join('') + (note ? `<div class="search-note">${note}</div>` : '');
+  if (restoreId != null) {
+    const back = [...host.querySelectorAll('[data-search-id]')].find((b) => b.dataset.searchId === restoreId);
+    if (back) back.focus({ preventScroll: true });
+  }
+}
+
+function onSearchInput(e) {
+  search.query = (e.target && e.target.value) || '';
+  if (searchKey(search.query)) loadCatalog();
+  renderSearch();
+}
+
+function onSearchClick(e) {
+  const btn = e.target.closest('[data-search-id]');
+  if (!btn) return;
+  const entry = search.catalog.find((c) => c.id === btn.dataset.searchId);
+  if (entry) toggleFollow({ name: entry.name, teamId: entry.id, leagues: entry.leagues });
 }
 
 /* 未收录中文名的球队：console 提示（每个名字只提示一次），方便随时补进 team-names.js */
@@ -867,6 +1008,7 @@ function focusFollowToggle() {
 }
 
 function renderFollow() {
+  renderSearch();
   const count = state.followed.length;
   const countEl = $('#followCount');
   if (countEl) countEl.textContent = count ? String(count) : '';
@@ -880,7 +1022,7 @@ function renderFollow() {
     pendingFollowFocus = null;
   }
   if (!count) {
-    host.innerHTML = `<div class="follow-empty">还没有关注球队；点赛程里的 ☆ 即可关注。</div>`;
+    host.innerHTML = `<div class="follow-empty">还没有关注球队；搜索球队名，或点赛程里的 ☆ 即可关注。</div>`;
     if (restoreIdx != null) focusFollowToggle(); /* 删空了：焦点回到面板开关，不落到 body */
     return;
   }
@@ -1352,6 +1494,9 @@ function bind() {
   $('#refresh').addEventListener('click', () => reload({ force: true }));
   $('#exportIcs') && $('#exportIcs').addEventListener('click', exportCalendar);
   $('#followToggle') && $('#followToggle').addEventListener('click', toggleFollowPanel);
+  $('#followSearch') && $('#followSearch').addEventListener('input', onSearchInput);
+  $('#followSearch') && $('#followSearch').addEventListener('focus', loadCatalog);
+  $('#followResults') && $('#followResults').addEventListener('click', onSearchClick);
   $('#followTeams') && $('#followTeams').addEventListener('click', (e) => {
     const rm = e.target.closest('[data-follow-idx]');
     if (rm) unfollowAt(Number(rm.dataset.followIdx));

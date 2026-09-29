@@ -68,7 +68,7 @@ function harness(entries = [], withApp = false) {
     for (const selector of ['#days', '#chips', '#filterToggle', '#filterCount', '.filters',
       '#list', '#refresh', '#updated', '#goToday', '#prevDay', '#nextDay', '#tz',
       '#heroDate', '#heroWd', '#heroRel', '#heroCount',
-      '#followToggle', '#followCount', '#followManager', '#followTeams',
+      '#followToggle', '#followCount', '#followManager', '#followTeams', '#followSearch', '#followResults',
       '#icsNote', '#exportIcs', '#viewDay', '#viewWeek']) elements[selector] = el(selector);
     elements['#followManager'].setAttribute('hidden', ''); // 与 index.html 初始一致：面板默认收起
     elements['#followToggle'].setAttribute('aria-expanded', 'false');
@@ -938,4 +938,130 @@ test('buildIcs 生成合法 iCalendar：转义、VALARM、行折叠', () => {
   for (const line of ics.split('\r\n')) {
     if (line) assert.ok(Buffer.byteLength(line, 'utf8') <= 75, `line too long: ${line}`);
   }
+});
+
+/* ---------- 球队搜索 ---------- */
+
+function teamsJson(teams) {
+  return { sports: [{ leagues: [{ teams: teams.map(([id, displayName, shortDisplayName]) => ({
+    team: { id, displayName, shortDisplayName, logos: [{ href: `https://a.espncdn.com/i/teamlogos/soccer/500/${id}.png` }] },
+  })) }] }] };
+}
+
+/* 按联赛路径返回不同名单；其余联赛返回空壳（不会写缓存） */
+function teamsFetch(byLeague) {
+  return async (url) => {
+    const m = /soccer\/([^/]+)\/teams/.exec(url);
+    const teams = (m && byLeague[m[1]]) || [];
+    return { ok: true, json: async () => teamsJson(teams) };
+  };
+}
+
+test('team list is cached for a week and falls back to stale cache on failure', async () => {
+  const h = harness();
+  h.setFetch(teamsFetch({ 'eng.1': [['360', 'Manchester United', 'Man United']] }));
+  const first = await h.call("ensureTeams('eng.1')");
+  assert.equal(first.teams.length, 1);
+  assert.equal(first.teams[0].id, '360');
+  const calls = h.attempts();
+  await h.call("ensureTeams('eng.1')");
+  assert.equal(h.attempts(), calls); // 新鲜缓存：不联网
+  /* 缓存过期后抓取失败：仍返回旧名单并标记 stale */
+  h.storage.setItem('fs1t|eng.1', JSON.stringify({ fetchedAt: Date.now() - 8 * 24 * 3600e3, teams: first.teams }));
+  h.call('teamsMemo.clear()');
+  h.setFetch(async () => { throw new Error('offline'); });
+  const stale = await h.call("ensureTeams('eng.1')");
+  assert.equal(stale.stale, true);
+  assert.equal(stale.failed, false);
+  assert.equal(stale.teams.length, 1);
+  /* 从没成功过：failed，且不编造名单 */
+  const none = await h.call("ensureTeams('esp.1')");
+  assert.equal(none.failed, true);
+  assert.deepEqual([...none.teams], []);
+});
+
+test('an empty team list response never overwrites a good cache', async () => {
+  const h = harness();
+  h.setFetch(teamsFetch({ 'eng.1': [['360', 'Manchester United', 'Man United']] }));
+  await h.call("ensureTeams('eng.1')");
+  h.setFetch(teamsFetch({}));
+  const r = await h.call("ensureTeams('eng.1', { force: true })");
+  assert.equal(r.teams.length, 1);
+  assert.equal(JSON.parse(h.storage.getItem('fs1t|eng.1')).teams.length, 1);
+});
+
+test('team search matches Chinese, English and nicknames, ranking exact before prefix before contains', () => {
+  const h = harness([], true);
+  h.context.catalog = h.call(`buildCatalog([
+    { leagueId: 'eng.1', teams: [
+      { id: '360', name: 'Manchester United', short: 'Man United', logo: '' },
+      { id: '382', name: 'Manchester City', short: 'Man City', logo: '' },
+      { id: '359', name: 'Arsenal', short: '', logo: '' } ] },
+    { leagueId: 'esp.1', teams: [ { id: '86', name: 'Real Madrid', short: 'Real Madrid', logo: '' } ] },
+  ])`);
+  const ids = (q) => [...h.call(`searchTeams(catalog, ${JSON.stringify(q)}).map((e) => e.id)`)];
+  assert.deepEqual(ids('曼联'), ['360']);
+  assert.deepEqual(ids('红魔'), ['360']);        // 昵称
+  assert.deepEqual(ids('皇马'), ['86']);          // 口语简称
+  assert.deepEqual(ids('arsenal'), ['359']);
+  assert.deepEqual(ids(' ARSENAL '), ['359']);    // 大小写与空白
+  assert.deepEqual(ids('Manchester').sort(), ['360', '382']);
+  assert.deepEqual(ids('madrid'), ['86']);
+  assert.deepEqual(ids(''), []);
+  assert.deepEqual(ids('zzzz'), []);
+});
+
+test('the same team in several leagues is one catalog entry that remembers every league', () => {
+  const h = harness([], true);
+  const entries = h.call(`buildCatalog([
+    { leagueId: 'eng.1', teams: [ { id: '359', name: 'Arsenal', short: '', logo: '' } ] },
+    { leagueId: 'uefa.champions', teams: [ { id: '359', name: 'Arsenal', short: '', logo: '' } ] },
+  ])`);
+  assert.equal(entries.length, 1);
+  assert.deepEqual([...entries[0].leagues], ['eng.1', 'uefa.champions']);
+});
+
+test('following from search records the team ID and all its leagues, and toggles off again', async () => {
+  const h = harness([], true);
+  h.setFetch(teamsFetch({
+    'eng.1': [['359', 'Arsenal', '']],
+    'uefa.champions': [['359', 'Arsenal', '']],
+    'chn.1': [['1', 'Beijing Guoan', 'Beijing']],
+  }));
+  h.call('toggleFollowPanel()');
+  h.elements['#followSearch'].value = '阿森纳';
+  h.elements['#followSearch'].dispatch('input', { target: h.elements['#followSearch'] });
+  await h.call('catalogPromise');
+  const html = h.elements['#followResults'].innerHTML;
+  assert.ok(html.includes('阿森纳'));
+  assert.ok(html.includes('英超 · 欧冠'));
+  assert.match(html, /aria-pressed="false"/);
+
+  const click = (id) => h.elements['#followResults'].dispatch('click', {
+    target: { closest: (sel) => (sel === '[data-search-id]' ? { dataset: { searchId: id } } : null) },
+  });
+  click('359');
+  const saved = JSON.parse(h.storage.getItem('fs1.followed'));
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].id, '359');
+  assert.equal(saved[0].name, 'Arsenal');
+  assert.deepEqual(saved[0].leagues, ['eng.1', 'uefa.champions']);
+  assert.match(h.elements['#followResults'].innerHTML, /aria-pressed="true"/);
+  assert.match(h.elements['#followResults'].innerHTML, /已关注/);
+  /* 关注联赛并入抓取范围 */
+  assert.ok(h.call('fetchLeagues()').includes('uefa.champions'));
+  /* 搜索里再点一次：取消关注，不留残余 */
+  click('359');
+  assert.equal(JSON.parse(h.storage.getItem('fs1.followed')).length, 0);
+});
+
+test('team search stays honest when the list cannot load', async () => {
+  const h = harness([], true);
+  h.setFetch(async () => { throw new Error('offline'); });
+  h.elements['#followSearch'].value = 'arsenal';
+  h.elements['#followSearch'].dispatch('input', { target: h.elements['#followSearch'] });
+  await h.call('catalogPromise');
+  assert.match(h.elements['#followResults'].innerHTML, /球队名单暂时无法加载/);
+  assert.doesNotMatch(h.elements['#followResults'].innerHTML, /没有找到/);
+  assert.equal(h.call('catalogPromise'), null); // 全部失败后清掉，再次聚焦可重试
 });

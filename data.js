@@ -276,6 +276,85 @@ async function ensureMonth(leagueId, ym, opts = {}) {
   }
 }
 
+/* ---------- 球队名单（仅供“搜索球队”使用） ----------
+ * 每联赛一份 `/teams`，与赛程月缓存分开存（前缀 fs1t|），不参与赛程缓存的淘汰；
+ * 名单一个赛季内几乎不变，缓存 7 天，抓取失败回落旧缓存。 */
+
+const TEAMS_PREFIX = 'fs1t|';
+const TEAMS_TTL_MS = 7 * 24 * 3600e3;
+
+const teamsMemo = new Map();
+
+function normalizeTeamEntry(t) {
+  if (!t || t.id == null || !t.displayName) return null;
+  return {
+    id: String(t.id),
+    name: t.displayName,
+    short: t.shortDisplayName && t.shortDisplayName !== t.displayName ? t.shortDisplayName : '',
+    logo: (t.logos && t.logos[0] && t.logos[0].href) || t.logo || '',
+  };
+}
+
+function readTeamsCache(leagueId) {
+  if (teamsMemo.has(leagueId)) return teamsMemo.get(leagueId);
+  let val = null;
+  try {
+    const raw = storage.getItem(TEAMS_PREFIX + leagueId);
+    val = raw ? JSON.parse(raw) : null;
+    if (!val || !Array.isArray(val.teams)) val = null;
+  } catch (e) {
+    val = null;
+  }
+  teamsMemo.set(leagueId, val);
+  return val;
+}
+
+function writeTeamsCache(leagueId, data) {
+  teamsMemo.set(leagueId, data);
+  try {
+    storage.setItem(TEAMS_PREFIX + leagueId, JSON.stringify(data));
+  } catch (e) {
+    /* 配额满或不可用：只保留内存副本 */
+  }
+}
+
+function fetchTeams(leagueId) {
+  const key = `teams|${leagueId}`;
+  if (inflight.has(key)) return inflight.get(key);
+  const p = fetchJson(`${ESPN_BASE}/${leagueId}/teams`)
+    .then((json) => {
+      noteNetResult(true);
+      const lg = json.sports && json.sports[0] && json.sports[0].leagues && json.sports[0].leagues[0];
+      const teams = ((lg && lg.teams) || []).map((x) => normalizeTeamEntry(x && x.team)).filter(Boolean);
+      const data = { fetchedAt: Date.now(), teams };
+      /* 空名单不覆盖旧缓存（接口偶发返回空壳） */
+      if (teams.length) writeTeamsCache(leagueId, data);
+      return teams.length ? data : null;
+    })
+    .catch((err) => {
+      noteNetResult(false);
+      throw err;
+    })
+    .finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
+/* 取某联赛球队名单 → { teams, stale, failed }；缓存新鲜直接用，冷却期不发网络 */
+async function ensureTeams(leagueId, opts = {}) {
+  const cached = readTeamsCache(leagueId);
+  const fresh = !!cached && Date.now() - cached.fetchedAt < TEAMS_TTL_MS;
+  if (fresh && !opts.force) return { teams: cached.teams, stale: false, failed: false };
+  const fallback = () => ({ teams: cached ? cached.teams : [], stale: !!cached, failed: !cached });
+  if (networkCoolingDown() && !opts.force) return fallback();
+  try {
+    const data = await fetchTeams(leagueId);
+    return data ? { teams: data.teams, stale: false, failed: false } : fallback();
+  } catch (e) {
+    return fallback();
+  }
+}
+
 async function mapLimit(items, limit, fn) {
   const out = new Array(items.length);
   let i = 0;
