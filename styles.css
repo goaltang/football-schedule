@@ -537,3 +537,61 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .foot-btn:disabled { opacity: 0.5; cursor: default; }
 .foot-note { color: var(--muted); font-size: 11px; }
 .status .cd { color: var(--accent); font-variant-numeric: tabular-nums; }
+
+/* ---------- 视图切换 / 周视图 ---------- */
+.view-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg {
+  font-family: var(--body); font-size: 12px; color: var(--muted);
+  background: none; border: 0; padding: 4px 10px; cursor: pointer;
+}
+.seg + .seg { border-left: 1px solid var(--line); }
+.seg.on { background: var(--accent); color: var(--ink); }
+
+.wday { margin: 14px 0 4px; }
+.wday-head {
+  font-family: var(--body); font-size: 11px; letter-spacing: 0.06em; color: var(--muted);
+  padding: 6px 4px; border-bottom: 1px solid var(--line-soft); font-weight: normal;
+}
+.wday-head b { font-family: var(--display); font-size: 14px; color: var(--paper); letter-spacing: 0.04em; }
+.wday-head .fav { font-style: normal; color: var(--accent); }
+
+/* 紧凑单行行：周视图专用（全宽度一致，高优先级盖过移动端两行布局） */
+.match.compact {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 34px minmax(0, 1fr) 48px;
+  grid-template-rows: auto;
+  gap: 2px 4px;
+  align-items: center;
+  padding: 6px 4px;
+}
+.match.compact .side { gap: 4px; }
+.match.compact .rail { grid-column: 1; grid-row: 1; }
+.match.compact .rail time { font-size: 13px; letter-spacing: 0.02em; }
+.match.compact .wd { display: block; font-size: 8px; letter-spacing: 0; }
+.match.compact .side.home {
+  grid-column: 2; grid-row: 1;
+  flex-direction: row; justify-content: flex-end;
+}
+.match.compact .side.away { grid-column: 4; grid-row: 1; }
+.match.compact .score {
+  grid-column: 3; grid-row: 1; align-self: center;
+  display: flex; flex-direction: row; align-items: baseline; justify-content: center;
+  gap: 3px;
+}
+.match.compact .score .sc { grid-row: auto; min-width: 0; font-size: 13px; }
+.match.compact .score .dash { display: inline; font-size: 11px; }
+.match.compact .score .vs { grid-row: auto; font-size: 10px; letter-spacing: 0.1em; }
+.match.compact .status {
+  grid-column: 5; grid-row: 1; justify-content: flex-end;
+  font-size: 9px; letter-spacing: 0; gap: 3px;
+}
+.match.compact .tname,
+.match.compact .side.home .tname { flex: 1 1 auto; font-size: 12px; }
+.match.compact .logo { width: 14px; height: 14px; }
+.match.compact .star { min-width: 14px; min-height: 28px; font-size: 10px; padding: 0; }
+
+/* 超窄屏紧凑行：藏队徽换队名空间 */
+@media (max-width: 360px) {
+  .match.compact { grid-template-columns: 38px minmax(0, 1fr) 30px minmax(0, 1fr) 40px; gap: 2px 3px; }
+  .match.compact .logo { display: none; }
+}

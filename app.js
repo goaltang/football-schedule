@@ -16,13 +16,16 @@ const STRIP_LEN = 7;
 const LS_ENABLED = 'fs1.enabled';
 const LS_DAY = 'fs1.day';
 const LS_FOLLOWED = 'fs1.followed';
+const LS_VIEW = 'fs1.view';
 
 const state = {
   dayKey: null,
   windowStart: null,
+  view: 'day',
   enabled: new Set(),
   followed: new Set(),
   data: null,
+  weekDays: null,
   nearby: null,
   preview: null,
   loading: false,
@@ -216,6 +219,7 @@ function loadPrefs() {
   // 回访时若上次停留在很远的日期，回到今天
   if (Math.abs(parseDayKey(state.dayKey) - parseDayKey(today)) > 2 * 864e5) state.dayKey = today;
   state.windowStart = addDays(state.dayKey, -3);
+  state.view = (() => { try { return localStorage.getItem(LS_VIEW) === 'week' ? 'week' : 'day'; } catch (e) { return 'day'; } })();
 }
 
 function savePrefs() {
@@ -223,6 +227,7 @@ function savePrefs() {
     localStorage.setItem(LS_ENABLED, JSON.stringify([...state.enabled]));
     localStorage.setItem(LS_FOLLOWED, JSON.stringify([...state.followed]));
     localStorage.setItem(LS_DAY, state.dayKey);
+    localStorage.setItem(LS_VIEW, state.view);
   } catch (e) { /* 隐私模式等场景忽略 */ }
 }
 
@@ -254,6 +259,13 @@ function renderDays() {
     if (button) button.focus({ preventScroll: true });
   }
   $('#goToday') && $('#goToday').classList.toggle('off', state.dayKey !== today);
+  const inWeek = state.view === 'week';
+  $('#viewDay') && $('#viewDay').classList.toggle('on', !inWeek);
+  $('#viewWeek') && $('#viewWeek').classList.toggle('on', inWeek);
+  $('#viewDay') && $('#viewDay').setAttribute('aria-pressed', String(!inWeek));
+  $('#viewWeek') && $('#viewWeek').setAttribute('aria-pressed', String(inWeek));
+  $('#prevDay') && $('#prevDay').setAttribute('aria-label', inWeek ? '前一周' : '前一天');
+  $('#nextDay') && $('#nextDay').setAttribute('aria-label', inWeek ? '后一周' : '后一天');
 }
 
 function renderChips() {
@@ -324,14 +336,71 @@ function matchRow(m, opts = {}) {
     return fallback;
   })();
   return (
-    `<div class="match st-${m.status}">` +
-    `<div class="rail"><time>${fmtTime(m.start)}</time><span class="wd">${opts.tag ? esc(leagueZh(m.league)) + ' · ' : ''}${periodLabel(m.start)}</span></div>` +
+    `<div class="match st-${m.status}${opts.compact ? ' compact' : ''}">` +
+    `<div class="rail"><time>${fmtTime(m.start)}</time><span class="wd">${opts.compact ? esc(leagueZh(m.league)) : (opts.tag ? esc(leagueZh(m.league)) + ' · ' : '') + periodLabel(m.start)}</span></div>` +
     `<div class="side home"><span class="tname" title="${en(m.home)}">${zh(m.home)}</span>${star(m.home, 'home')}${logo(m.home)}</div>` +
     `<div class="score">${scorePart}</div>` +
     `<div class="side away">${logo(m.away)}${star(m.away, 'away')}<span class="tname" title="${en(m.away)}">${zh(m.away)}</span></div>` +
     `<div class="status">${statusPart}</div>` +
     `</div>`
   );
+}
+
+/* 周视图：日期条窗口的 7 天一屏呈现，按天分组、紧凑单行行 */
+function renderWeek() {
+  const root = $('#list');
+  const days = state.weekDays;
+  const active = document.activeElement;
+  const focused = root.contains(active) && active.matches('button') && active.dataset.star
+    ? { match: active.dataset.match, side: active.dataset.side } : null;
+  const start = parseDayKey(state.windowStart);
+  const end = parseDayKey(addDays(state.windowStart, STRIP_LEN - 1));
+  const md = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+  const all = days ? days.flatMap((d) => d.matches) : [];
+  const fav = all.filter(matchHasFollowed).length;
+  const incomplete = !!days && days.some((d) => d.error || (d.failed && d.failed.length) || d.stale || d.pending);
+  $('#heroDate').textContent = md(start);
+  $('#heroWd').textContent = '整周';
+  $('#heroRel').textContent = '';
+  $('#heroCount').textContent = days
+    ? `${md(start)}–${md(end)} · ${all.length} 场${fav ? ` · 关注 ${fav} 场` : ''}${incomplete ? ' · 信息不完整' : ''}`
+    : state.error ? '数据不可用' : state.loading ? '加载中…' : '赛程待确认';
+
+  if (state.loading && !days) {
+    root.innerHTML = skeleton();
+    return;
+  }
+  if (state.error && (!days || !all.length)) {
+    root.innerHTML = `<div class="empty-day"><p>数据暂时拿不到</p><button class="btn" id="retry">重试</button></div>`;
+    return;
+  }
+  if (!days) {
+    root.innerHTML = '';
+    return;
+  }
+  const parts = [];
+  for (const d of days) {
+    if (!d.matches.length) continue;
+    const dt = parseDayKey(d.dayKey);
+    const rel = relativeLabel(d.dayKey);
+    const f = d.matches.filter(matchHasFollowed).length;
+    parts.push(
+      `<section class="wday" id="wday-${d.dayKey}">` +
+      `<h3 class="wday-head"><b>${md(dt)}</b> ${esc(weekdayOf(d.dayKey))}` +
+      `${rel && rel !== weekdayOf(d.dayKey) ? ' · ' + esc(rel) : ''}` +
+      ` · ${d.matches.length} 场${f ? ` · <i class="fav">关注 ${f}</i>` : ''}${d.error ? ' · 不可用' : ''}</h3>` +
+      d.matches.map((m) => matchRow(m, { compact: true })).join('') +
+      `</section>`
+    );
+  }
+  if (!parts.length) {
+    parts.push(`<div class="empty-day"><p>这一周没有赛程</p><p class="sub">日期条上的圆点表示哪天有球</p></div>`);
+  }
+  root.innerHTML = parts.join('');
+  if (focused) {
+    const back = [...root.querySelectorAll('[data-star]')].find((b) => b.dataset.match === focused.match && b.dataset.side === focused.side);
+    if (back) back.focus({ preventScroll: true });
+  }
 }
 
 function skeleton() {
@@ -357,6 +426,10 @@ function renderHero() {
 }
 
 function renderList() {
+  if (state.view === 'week') {
+    renderWeek();
+    return;
+  }
   renderHero();
   const root = $('#list');
   const active = document.activeElement;
@@ -505,6 +578,7 @@ async function enrichEmptyDay(seq) {
 }
 
 async function reload(opts = {}) {
+  if (state.view === 'week') return reloadWeek(opts);
   const seq = ++loadSeq;
   state.loading = true;
   state.error = null;
@@ -542,10 +616,47 @@ async function reload(opts = {}) {
   schedulePrefetch();
 }
 
+/* 周视图加载：并行取窗口内 7 天（数据层“联赛×月”缓存共享），单天失败不影响整周 */
+async function reloadWeek(opts = {}) {
+  const seq = ++loadSeq;
+  state.loading = true;
+  state.error = null;
+  render();
+  const leagues = [...state.enabled];
+  const keys = Array.from({ length: STRIP_LEN }, (_, i) => addDays(state.windowStart, i));
+  try {
+    const days = await mapLimit(keys, 3, async (key) => {
+      try {
+        const d = await loadDay(key, { leagues, force: opts.force });
+        return { dayKey: key, matches: d.matches, failed: d.failed, stale: d.stale, pending: d.pending };
+      } catch (e) {
+        return { dayKey: key, matches: [], failed: ['*'], error: true };
+      }
+    });
+    if (seq !== loadSeq) return;
+    state.weekDays = days;
+    state.loading = false;
+    render();
+  } catch (e) {
+    if (seq !== loadSeq) return;
+    state.error = (e && e.message) || '未知错误';
+    state.loading = false;
+    render();
+    return;
+  }
+  scheduleLivePoll();
+}
+
+function currentMatches() {
+  return state.view === 'week'
+    ? (state.weekDays || []).flatMap((d) => d.matches)
+    : (state.data && state.data.matches) || [];
+}
+
 function scheduleLivePoll() {
   clearTimeout(liveTimer);
   if (document.hidden) return;
-  const hasLive = state.data && state.data.matches.some((m) => m.live);
+  const hasLive = currentMatches().some((m) => m.live);
   if (hasLive) liveTimer = setTimeout(() => reload({ force: true }), LIVE_POLL_MS);
 }
 
@@ -563,12 +674,35 @@ function schedulePrefetch() {
 }
 
 function gotoDay(dayKey) {
+  const prevStart = state.windowStart;
   state.dayKey = dayKey;
   const end = addDays(state.windowStart, STRIP_LEN - 1);
   if (dayKey < state.windowStart) state.windowStart = addDays(dayKey, -3);
   if (dayKey > end) state.windowStart = addDays(dayKey, 3 - STRIP_LEN + 1);
   savePrefs();
+  if (state.view === 'week') {
+    render();
+    const el = $(`#wday-${dayKey}`);
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start' });
+    if (!state.weekDays || state.windowStart !== prevStart) reload();
+    return;
+  }
   state.data = null;
+  render();
+  reload();
+}
+
+function setView(view) {
+  if (state.view === view) return;
+  state.view = view;
+  savePrefs();
+  if (view === 'week') {
+    state.nearby = null;
+    state.preview = null;
+    state.weekDays = null;
+  } else {
+    state.data = null;
+  }
   render();
   reload();
 }
@@ -704,9 +838,11 @@ function bind() {
     const btn = e.target.closest('[data-day]');
     if (btn) gotoDay(btn.dataset.day);
   });
-  $('#prevDay').addEventListener('click', () => gotoDay(addDays(state.dayKey, -1)));
-  $('#nextDay').addEventListener('click', () => gotoDay(addDays(state.dayKey, 1)));
+  $('#prevDay').addEventListener('click', () => gotoDay(addDays(state.dayKey, state.view === 'week' ? -STRIP_LEN : -1)));
+  $('#nextDay').addEventListener('click', () => gotoDay(addDays(state.dayKey, state.view === 'week' ? STRIP_LEN : 1)));
   $('#goToday').addEventListener('click', () => gotoDay(dayKeyOf(new Date())));
+  $('#viewDay') && $('#viewDay').addEventListener('click', () => setView('day'));
+  $('#viewWeek') && $('#viewWeek').addEventListener('click', () => setView('week'));
   $('#filterToggle').addEventListener('click', () => {
     const open = $('.filters').classList.toggle('is-open');
     $('#filterToggle').setAttribute('aria-expanded', String(open));
@@ -742,7 +878,7 @@ function bind() {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       clearTimeout(liveTimer);
-    } else if (state.data && state.data.matches.some((m) => m.live)) {
+    } else if (currentMatches().some((m) => m.live)) {
       reload({ force: true });
     }
   });

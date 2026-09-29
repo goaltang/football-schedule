@@ -23,6 +23,7 @@ function harness(entries = [], withApp = false) {
   const el = () => ({
     innerHTML: '', textContent: '', children: [],
     classList: { toggle() {} },
+    setAttribute() {},
     addEventListener() {}, contains: () => false,
     querySelectorAll: () => [],
   });
@@ -194,6 +195,34 @@ test('countdownText 分档与边界', () => {
   assert.equal(at('2026-10-07T11:59:00Z'), '5 天后');
   assert.equal(at('2026-10-08T12:00:00Z'), '');
   assert.equal(at('2026-10-01T11:59:00Z'), '');
+});
+
+test('week view groups by day, skips empty days, marks followed', async () => {
+  const h = harness([], true);
+  h.context.fixtures = [
+    match('w1', 'eng.1', 22, '42'),
+    match('w2', 'eng.1', 22, '77'),
+    match('w3', 'eng.2', 23, '88'),
+  ];
+  h.call("toggleFollow({ name: 'Home', teamId: '42' })");
+  await h.call(`(async () => {
+    state.view = 'week';
+    state.windowStart = '2026-09-21';
+    state.dayKey = '2026-09-22';
+    state.weekDays = [
+      { dayKey: '2026-09-22', matches: fixtures.slice(0, 2) },
+      { dayKey: '2026-09-23', matches: [fixtures[2]] },
+      { dayKey: '2026-09-24', matches: [] },
+    ];
+    render();
+  })()`);
+  const html = h.elements['#list'].innerHTML;
+  assert.equal((html.match(/class="wday"/g) || []).length, 2); // 空日跳过
+  assert.ok(html.includes('class="match st-SCHEDULED compact"'));
+  assert.ok(html.includes('关注 1'));
+  assert.ok(html.includes('id="wday-2026-09-23"'));
+  assert.ok(!html.includes('wday-2026-09-24'));
+  assert.equal(h.call('currentMatches().length'), 3);
 });
 
 test('buildIcs 生成合法 iCalendar：转义、VALARM、行折叠', () => {
