@@ -3,7 +3,7 @@
  */
 'use strict';
 
-const CACHE = 'football-schedule-shell-v4';
+const CACHE = 'football-schedule-shell-v6';
 const SHELL = [
   './',
   './index.html',

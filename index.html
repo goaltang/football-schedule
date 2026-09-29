@@ -50,7 +50,12 @@
       </div>
       <button class="btn today-jump" id="goToday">今天</button>
       <button class="btn refresh" id="refresh">刷新</button>
+      <button type="button" class="btn follow-toggle" id="followToggle" aria-controls="followManager" aria-expanded="false">关注 <span class="follow-count" id="followCount"></span></button>
     </div>
+  </div>
+  <div class="follow-manager" id="followManager" hidden>
+    <p class="follow-head">我的关注</p>
+    <div class="follow-teams" id="followTeams"></div>
   </div>
   <div class="chips" id="chips"></div>
 </div>

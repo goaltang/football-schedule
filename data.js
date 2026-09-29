@@ -371,20 +371,6 @@ async function loadDay(dayKey, opts = {}) {
   return { ...instant, failed: [], pending: true };
 }
 
-/* 只读缓存：找出关注球队所在的联赛（日历导出用；只扫本地缓存，不发请求） */
-function cachedLeaguesOfFollowed(isFav) {
-  const leagues = new Set();
-  for (let i = 0; i < storage.length; i++) {
-    const parts = (storage.key(i) || '').split('|');
-    if (parts.length !== 4 || parts[0] !== CACHE_PREFIX.slice(0, -1) || parts[1] !== 'm') continue;
-    const [, , leagueId, ym] = parts;
-    if (leagues.has(leagueId)) continue;
-    const entry = readCache(leagueId, ym);
-    if (entry && Array.isArray(entry.events) && entry.events.some(isFav)) leagues.add(leagueId);
-  }
-  return [...leagues];
-}
-
 /* ---------- 对外：只读缓存，不发请求 ---------- */
 
 function cachedDayMatches(dayKey, leagueIds) {
@@ -402,9 +388,16 @@ function cachedDayMatches(dayKey, leagueIds) {
  * 一次由近及远双向扫描，同时给出全量与“关注球队”的最近比赛日；
  * 缺失月份各只尝试一次抓取（受 maxMonths 与熔断约束），失败后仍扫描已有缓存；
  * 跨过数据不完整的月份所找到的候选仅代表缓存范围内最近。
+ *
+ * 联赛分层（可选，均默认 opts.leagues 以兼容旧调用）：
+ * - opts.leagues        ：扫描+抓取的联赛集合（缓存读取与网络请求只走这一遍，不重复抓）
+ * - opts.genericLeagues  ：prev/next 的计数联赛（如“其他比赛只按启用联赛”语义）
+ * - opts.favLeagues      ：favPrev/favNext 的计数联赛（关注球队可来自并集/被关闭联赛）
  */
 async function findNearbyMatchdays(dayKey, opts = {}) {
-  const leagues = opts.leagues || DEFAULT_ENABLED;
+  const scanLeagues = opts.leagues || DEFAULT_ENABLED;
+  const genericLeagues = opts.genericLeagues || opts.leagues || DEFAULT_ENABLED;
+  const favLeagues = opts.favLeagues || opts.leagues || DEFAULT_ENABLED;
   const isFav = opts.isFav || null;
   const favMaxDays = opts.favMaxDays ?? 60;
   const maxMonths = opts.maxMonths ?? 4;
@@ -417,25 +410,28 @@ async function findNearbyMatchdays(dayKey, opts = {}) {
     const fk = dir === 1 ? 'favNext' : 'favPrev';
     let budget = maxMonths;
     let failedWaves = 0;
-    let partial = false;
+    let genericPartial = false;
+    let favPartial = false;
     for (let step = 1; step <= maxDays; step++) {
       const cand = addDays(dayKey, dir * step);
       for (const ym of monthsForDay(cand)) {
-        const missingLeagues = leagues.filter((id) => !readCache(id, ym));
+        const missingLeagues = scanLeagues.filter((id) => !readCache(id, ym));
         if (missingLeagues.length && budget > 0 && failedWaves < 2 && !attemptedMonths.has(ym)) {
           attemptedMonths.add(ym);
           budget--;
           await mapLimit(missingLeagues, 6, (leagueId) => ensureMonth(leagueId, ym));
           failedWaves = missingLeagues.some((id) => readCache(id, ym)) ? 0 : failedWaves + 1;
         }
-        if (leagues.some((id) => !readCache(id, ym))) partial = true;
+        if (genericLeagues.some((id) => !readCache(id, ym))) genericPartial = true;
+        if (favLeagues.some((id) => !readCache(id, ym))) favPartial = true;
       }
       /* 网络失败只停止后续抓取；仍须扫描已缓存的远处月份 */
-      const all = cachedDayMatches(cand, leagues);
-      if (!result[k] && all.length) result[k] = { dayKey: cand, count: all.length, ...(partial ? { partial: true } : {}) };
+      const generic = cachedDayMatches(cand, genericLeagues);
+      if (!result[k] && generic.length) result[k] = { dayKey: cand, count: generic.length, ...(genericPartial ? { partial: true } : {}) };
       if (isFav && !result[fk] && step <= favMaxDays) {
-        const favN = all.reduce((n, m) => n + (isFav(m) ? 1 : 0), 0);
-        if (favN) result[fk] = { dayKey: cand, count: favN, ...(partial ? { partial: true } : {}) };
+        const favSrc = genericLeagues === favLeagues ? generic : cachedDayMatches(cand, favLeagues);
+        const favN = favSrc.reduce((n, m) => n + (isFav(m) ? 1 : 0), 0);
+        if (favN) result[fk] = { dayKey: cand, count: favN, ...(favPartial ? { partial: true } : {}) };
       }
       /* 全量已找到，且（无需找关注 / 关注已找到 / 关注搜索超界）即收工 */
       if (result[k] && (!isFav || result[fk] || step > favMaxDays)) break;

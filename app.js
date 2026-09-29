@@ -23,7 +23,7 @@ const state = {
   windowStart: null,
   view: 'day',
   enabled: new Set(),
-  followed: new Set(),
+  followed: [],
   data: null,
   weekDays: null,
   nearby: null,
@@ -89,7 +89,16 @@ function crestImg(lgId, url) {
   );
 }
 
-/* ID 是首选身份；旧偏好仍是归一化名字，等球队出现时再升级。 */
+/* 关注模型：fs1.followed 是“球队档案”数组，每条 { id, name, names, leagues }。
+ * - names 存归一化名字（含 TEAM_ZH 别名键），是身份的权威来源；
+ * - id 只是辅助：ESPN 可能复用 ID，已知名称的档案遇到同 ID 但名字不同 → 视为不同队；
+ *   只有 id-only 的旧档案（还没观察到球队）才按 ID 命中；
+ * - leagues 只作提示（导出/空日预览），从不参与身份判定；
+ * - isFollowed/matchHasFollowed 纯函数：渲染期间绝不写存储、不改状态，
+ *   名称/ID 补全只发生在显式的 enrichFollowedFromMatches（数据加载路径）里。
+ */
+const UNKNOWN_TEAM_NAME = '未知球队'; /* 数据层 normalizeEvent 的占位名，不算有效身份 */
+
 const aliasesByName = new Map();
 for (const [name, zh] of Object.entries(TEAM_ZH)) {
   if (!aliasesByName.has(zh)) aliasesByName.set(zh, new Set());
@@ -102,47 +111,190 @@ function nameKeys(team) {
   return zh === team.name ? [key] : [...(aliasesByName.get(zh) || []), key];
 }
 
-function followKey(team) {
-  return team.teamId != null && team.teamId !== '' ? `id:${team.teamId}` : `name:${normalizeTeamName(team.name)}`;
+function teamSideId(team) {
+  return team && team.teamId != null && team.teamId !== '' ? String(team.teamId) : null;
 }
 
-function isFollowed(team) {
-  if (!team || !team.name) return false;
-  const key = followKey(team);
-  if (state.followed.has(key)) return true;
-  const legacy = nameKeys(team).filter((name) => state.followed.has(name) || state.followed.has(`name:${name}`));
-  if (!legacy.length) return false;
-  if (team.teamId != null && team.teamId !== '') {
-    for (const name of legacy) {
-      state.followed.delete(name);
-      state.followed.delete(`name:${name}`);
+function recordNames(rec) {
+  const set = new Set(rec.names || []);
+  if (rec.name && rec.name !== UNKNOWN_TEAM_NAME) set.add(normalizeTeamName(rec.name));
+  return set;
+}
+
+function recordNamed(rec) {
+  return !!((rec.name && rec.name !== UNKNOWN_TEAM_NAME) || (rec.names && rec.names.length));
+}
+
+function recordMatches(rec, team) {
+  const tid = teamSideId(team);
+  if (recordNamed(rec)) {
+    /* 观察到真实队名：名字说了算——同名不同 ID 也跟随（ID 变更），
+       同 ID 但队名明显不同则不跟随（ESPN 复用 ID） */
+    const obsKnown = !!(team.name && team.name !== UNKNOWN_TEAM_NAME);
+    if (obsKnown) {
+      const keys = nameKeys(team);
+      const recKeys = recordNames(rec);
+      return keys.some((k) => recKeys.has(k));
     }
-    state.followed.add(key);
-    savePrefs();
+    /* 观察不到有效名字（占位/缺失）：无冲突证据，退回 ID */
+    return !!tid && !!rec.id && rec.id === tid;
   }
-  return true;
+  /* 旧 id-only 档案：名称未知，只能按 ID */
+  return !!tid && !!rec.id && rec.id === tid;
+}
+
+function mkFollowRecord(id, name, names, leagues) {
+  return {
+    id: id != null && id !== '' ? String(id) : null,
+    name: name || null,
+    names: [...new Set((names || []).filter(Boolean))],
+    leagues: [...new Set((leagues || []).filter(Boolean))],
+  };
+}
+
+function storedToRecord(item) {
+  if (typeof item === 'string') {
+    if (!item) return null;
+    if (item.startsWith('id:')) return mkFollowRecord(item.slice(3), null, [], []);
+    const name = item.startsWith('name:') ? item.slice(5) : item;
+    return name ? mkFollowRecord(null, null, [name], []) : null;
+  }
+  if (item && typeof item === 'object' && !Array.isArray(item)) {
+    const names = Array.isArray(item.names) ? item.names : [];
+    const leagues = Array.isArray(item.leagues) ? item.leagues : [];
+    const rec = mkFollowRecord(item.id, item.name, names, leagues);
+    return rec.id || rec.name || rec.names.length ? rec : null;
+  }
+  return null;
+}
+
+function unionRecord(target, src) {
+  if (!target.name && src.name) target.name = src.name;
+  if (!target.id && src.id) target.id = src.id;
+  for (const k of src.names) if (!target.names.includes(k)) target.names.push(k);
+  for (const l of src.leagues) if (!target.leagues.includes(l)) target.leagues.push(l);
+}
+
+/* 同名判定按已知别名放宽：zhName 相同即同队（Inter Milan / Internazionale） */
+function recordNamesOverlap(a, b) {
+  const ka = recordNames(a);
+  const kb = recordNames(b);
+  if (!ka.size || !kb.size) return false;
+  const zhA = new Set([...ka].map((k) => zhName(k)));
+  for (const k of kb) if (zhA.has(zhName(k))) return true;
+  return false;
+}
+
+function mergeRecordList(list) {
+  const out = [];
+  for (const rec of list) {
+    const recIsNamed = recordNamed(rec);
+    /* 按 ID 合并仅限至少一侧未具名：两条已知名字却同 ID 是 ESPN 复用 ID 的不同球队，
+       与 recordMatches 的 ID-reuse guard 保持一致，绝不并成一条 */
+    let target = rec.id ? out.find((r) => r.id === rec.id && (!recIsNamed || !recordNamed(r))) : null;
+    if (!target) target = out.find((r) => recordNamesOverlap(r, rec));
+    if (target) unionRecord(target, rec);
+    else out.push(rec);
+  }
+  return out;
+}
+
+/* 旧 fs1.followed：JSON 字符串数组（`id:X` / `name:X` / 裸名字），
+   也兼容当前对象数组；未知的 id-only 关注原样保留，等观察到比赛再补全 */
+function migrateFollowed(raw) {
+  let val = null;
+  try { val = JSON.parse(raw || '[]'); } catch (e) { return []; }
+  const list = Array.isArray(val)
+    ? val
+    : (val && typeof val === 'object' && Array.isArray(val.teams) ? val.teams : []);
+  return mergeRecordList(list.map(storedToRecord).filter(Boolean));
+}
+
+function loadFollowed() {
+  try { return migrateFollowed(localStorage.getItem(LS_FOLLOWED)); } catch (e) { return []; }
+}
+
+/* 纯查询：无存储写入、无状态变更 */
+function isFollowed(team) {
+  if (!team) return false;
+  if (!teamSideId(team) && !team.name) return false;
+  return state.followed.some((rec) => recordMatches(rec, team));
 }
 
 function matchHasFollowed(m) {
-  return isFollowed(m.home) || isFollowed(m.away);
+  return !!m && (isFollowed(m.home) || isFollowed(m.away));
 }
 
-function toggleFollow(team) {
-  const on = isFollowed(team);
-  const key = followKey(team);
-  if (on) {
-    state.followed.delete(key);
-    for (const name of nameKeys(team)) {
-      state.followed.delete(name);
-      state.followed.delete(`name:${name}`);
+function followedLeagues() {
+  const out = new Set();
+  for (const rec of state.followed) for (const lg of rec.leagues || []) out.add(lg);
+  return [...out];
+}
+
+/* 观察到比赛时补全档案：写 ID/名字/别名/联赛，合并同 ID 重复项；只在数据路径调用 */
+function enrichFollowedFromMatches(matches) {
+  if (!state.followed.length || !matches || !matches.length) return false;
+  let changed = false;
+  for (const m of matches) {
+    const league = m && m.league;
+    for (const side of [m && m.home, m && m.away]) {
+      if (!side) continue;
+      const tid = teamSideId(side);
+      const obsKnown = !!(side.name && side.name !== UNKNOWN_TEAM_NAME);
+      if (!tid && !obsKnown) continue;
+      const hits = state.followed.filter((rec) => recordMatches(rec, side));
+      if (!hits.length) continue;
+      const keys = obsKnown ? nameKeys(side) : [];
+      for (const rec of hits) {
+        if (tid && rec.id !== tid) { rec.id = tid; changed = true; }
+        if (obsKnown && !rec.name) { rec.name = side.name; changed = true; }
+        for (const k of keys) {
+          if (!rec.names.includes(k)) { rec.names.push(k); changed = true; }
+        }
+        if (league && !rec.leagues.includes(league)) { rec.leagues.push(league); changed = true; }
+      }
     }
-  } else {
-    state.followed.add(key);
   }
-  savePrefs();
+  if (changed) state.followed = mergeRecordList(state.followed);
+  if (changed) {
+    invalidateFollowNext();
+    saveFollowed();
+  }
+  return changed;
+}
+
+function followChanged() {
+  invalidateFollowNext();
+  saveFollowed();
   render();
   /* 空日关注变化要重算预览，但保留旧预览直到新结果就绪，避免键盘焦点丢失。 */
   if (state.data && !state.data.matches.length) reload({ preservePreview: true });
+}
+
+function toggleFollow(team) {
+  if (!team) return;
+  const tid = teamSideId(team);
+  const name = team.name && team.name !== UNKNOWN_TEAM_NAME ? team.name : null;
+  if (!tid && !name) return;
+  const on = isFollowed(team);
+  if (on) {
+    /* 只移除与该队匹配的档案，不碰无关关注 */
+    state.followed = state.followed.filter((rec) => !recordMatches(rec, team));
+  } else {
+    state.followed.push(mkFollowRecord(tid, name, name ? nameKeys(team) : [], team.league ? [team.league] : []));
+  }
+  followChanged();
+}
+
+/* 被删行正持有焦点时记住下标，重绘后把焦点交给下一条/上一条或面板开关 */
+let pendingFollowFocus = null;
+
+function unfollowAt(idx) {
+  if (!Number.isInteger(idx) || idx < 0 || idx >= state.followed.length) return;
+  const active = document.activeElement;
+  if (active && active.dataset && active.dataset.followIdx === String(idx)) pendingFollowFocus = idx;
+  state.followed.splice(idx, 1);
+  followChanged();
 }
 
 /* 未收录中文名的球队：console 提示（每个名字只提示一次），方便随时补进 team-names.js */
@@ -199,20 +351,20 @@ function relativeLabel(dayKey) {
 
 /* ---------- 状态存取 ---------- */
 
-function loadPrefs() {
+function loadEnabled() {
   try {
     const raw = localStorage.getItem(LS_ENABLED);
     const ids = raw ? JSON.parse(raw) : null;
-    state.enabled = new Set(Array.isArray(ids) && ids.length ? ids : DEFAULT_ENABLED);
+    return new Set(Array.isArray(ids) && ids.length ? ids : DEFAULT_ENABLED);
   } catch (e) {
-    state.enabled = new Set(DEFAULT_ENABLED);
+    return new Set(DEFAULT_ENABLED);
   }
-  try {
-    const fav = JSON.parse(localStorage.getItem(LS_FOLLOWED) || '[]');
-    state.followed = new Set(Array.isArray(fav) ? fav.filter((key) => typeof key === 'string' && key) : []);
-  } catch (e) {
-    state.followed = new Set();
-  }
+}
+
+function loadPrefs() {
+  state.enabled = loadEnabled();
+  state.followed = loadFollowed();
+  invalidateFollowNext();
   const savedDay = (() => { try { return localStorage.getItem(LS_DAY); } catch (e) { return null; } })();
   const today = dayKeyOf(new Date());
   state.dayKey = savedDay && /^\d{4}-\d{2}-\d{2}$/.test(savedDay) ? savedDay : today;
@@ -222,16 +374,72 @@ function loadPrefs() {
   state.view = (() => { try { return localStorage.getItem(LS_VIEW) === 'week' ? 'week' : 'day'; } catch (e) { return 'day'; } })();
 }
 
-function savePrefs() {
+/* 按键写入：每次只写本次操作真正变化的那个偏好，避免另一页的 day/view 被顺手覆盖 */
+function writePref(key, value) {
   try {
-    localStorage.setItem(LS_ENABLED, JSON.stringify([...state.enabled]));
-    localStorage.setItem(LS_FOLLOWED, JSON.stringify([...state.followed]));
-    localStorage.setItem(LS_DAY, state.dayKey);
-    localStorage.setItem(LS_VIEW, state.view);
+    if (localStorage.getItem(key) === value) return;
+    localStorage.setItem(key, value);
   } catch (e) { /* 隐私模式等场景忽略 */ }
 }
 
+function saveFollowed() { writePref(LS_FOLLOWED, JSON.stringify(state.followed)); }
+function saveEnabled() { writePref(LS_ENABLED, JSON.stringify([...state.enabled])); }
+function saveDay() { writePref(LS_DAY, state.dayKey); }
+function saveView() { writePref(LS_VIEW, state.view); }
+
+/* 跨标签页：其他标签页写了 fs1.followed / fs1.enabled 时回读并重绘。
+   只读不写、且只回读相关键——本处理函数绝不写任何偏好，避免把本标签页的旧值盖回去。 */
+function onStorageEvent(e) {
+  if (!e) return;
+  const key = e.key;
+  if (key !== null && key !== LS_FOLLOWED && key !== LS_ENABLED) return;
+  const followedChanged = key === null || key === LS_FOLLOWED;
+  const enabledChanged = key === null || key === LS_ENABLED;
+  if (followedChanged) state.followed = loadFollowed();
+  if (enabledChanged) state.enabled = loadEnabled();
+  invalidateFollowNext();
+  render();
+  if (enabledChanged) {
+    state.data = null;
+    state.weekDays = null;
+    reload();
+    return;
+  }
+  /* 关注变化：空日预览可能要重算；有比赛的日期 render 已覆盖 */
+  if (state.data && !state.data.matches.length && !state.loading) enrichEmptyDay(loadSeq);
+}
+
 /* ---------- 渲染 ---------- */
+
+/* 日期条打点：缓存覆盖决定“确认无赛（off）”还是“未知（unk）”。
+   fill/hollow：缓存里有比赛（无论覆盖是否完整）；off：启用联赛×覆盖月份全部有缓存且无比赛；
+   unk：覆盖不足（含完全无缓存），不能声称当天没比赛。 */
+/* 四种打点状态都给出明确文字，屏幕阅读器不必靠颜色/形状猜测（视觉不变） */
+const DAY_DOT_TEXT = {
+  fill: '有关注球队比赛',
+  hollow: '有其他比赛',
+  off: '无所选联赛比赛',
+  unk: '赛程未知',
+};
+
+function dayDotState(dayKey) {
+  const ms = cachedDayMatches(dayKey, [...state.enabled]);
+  if (ms.some(matchHasFollowed)) return 'fill';
+  if (ms.length) return 'hollow';
+  const months = monthsForDay(dayKey);
+  const now = Date.now();
+  let total = 0;
+  let fresh = 0;
+  for (const id of state.enabled) {
+    for (const ym of months) {
+      total += 1;
+      const entry = readCache(id, ym);
+      /* 过期缓存里的赛程可能已变更（补赛/改期），不能据此确认“无赛” */
+      if (entry && now - (entry.fetchedAt || 0) < monthTtlMs(ym)) fresh += 1;
+    }
+  }
+  return total > 0 && fresh === total ? 'off' : 'unk';
+}
 
 function renderDays() {
   const focused = $('#days').contains(document.activeElement) ? document.activeElement.dataset.day : null;
@@ -243,10 +451,9 @@ function renderDays() {
     const rel = relativeLabel(key);
     const sel = key === state.dayKey ? ' sel' : '';
     const isToday = key === today ? ' today' : '';
-    const ms = cachedDayMatches(key, [...state.enabled]);
-    const dotCls = ms.some(matchHasFollowed) ? 'fill' : ms.length ? 'hollow' : 'off';
+    const dotCls = dayDotState(key);
     cells.push(
-      `<button class="day${sel}${isToday}" data-day="${key}" aria-label="${key} ${esc(rel)}" aria-pressed="${key === state.dayKey}"${key === today ? ' aria-current="date"' : ''}>` +
+      `<button class="day${sel}${isToday}" data-day="${key}" aria-label="${key} ${esc(rel)} ${esc(DAY_DOT_TEXT[dotCls] || '')}" aria-pressed="${key === state.dayKey}"${key === today ? ' aria-current="date"' : ''}>` +
       `<span class="day-rel">${esc(rel)}</span>` +
       `<span class="day-date">${d.getMonth() + 1}/${d.getDate()}</span>` +
       `<span class="day-dot ${dotCls}"></span>` +
@@ -291,10 +498,20 @@ function countdownText(startIso, nowMs) {
   return '';
 }
 
-/* 每分钟原地刷新倒计时文本，不重绘列表（setTimeout 链：测试环境对长延时定时器不触发） */
+/* 每分钟一次：原地刷新倒计时（不重绘列表）；面板展开时同步推进“已缓存下一场”
+   ——越过开赛点后重算该提示，只重绘 #followTeams，不碰列表、不联网 */
+function minuteTick() {
+  updateCountdowns();
+  const panel = $('#followManager');
+  if (panel && !panel.hasAttribute('hidden')) {
+    invalidateFollowNext();
+    renderFollow();
+  }
+}
+
 function scheduleCountdownTick() {
   setTimeout(() => {
-    updateCountdowns();
+    minuteTick();
     scheduleCountdownTick();
   }, 60000);
 }
@@ -314,7 +531,7 @@ function matchRow(m, opts = {}) {
     if (!t || !t.name) return '';
     const on = isFollowed(t);
     return `<button class="star${on ? ' on' : ''}" data-star="${en(t)}" data-team-id="${esc(t && t.teamId || '')}" ` +
-      `data-match="${esc(m.id)}" data-side="${side}" data-copy="${opts.copy || 'league'}" ` +
+      `data-match="${esc(m.id)}" data-side="${side}" data-league="${esc(m.league || '')}" data-copy="${opts.copy || 'league'}" ` +
       `aria-label="${on ? '取消关注' : '关注'}${zh(t)}" aria-pressed="${on}" title="${on ? '取消关注' : '关注'}">${on ? '★' : '☆'}</button>`;
   };
   const scorePart = (() => {
@@ -543,19 +760,146 @@ function renderList() {
     : '';
 }
 
+/* 面板“已缓存下一场赛程”：只扫本地月缓存（零联网），仅在面板打开时计算，
+   关注/数据/缓存变化后由 invalidateFollowNext() 失效重算 */
+let followNextMemo = null;
+
+function invalidateFollowNext() {
+  followNextMemo = null;
+}
+
+/* 全部联赛的本地月缓存里未来的比赛（过去的一律排除，按开赛时间排序，按比赛 ID 去重） */
+function cachedUpcomingMatches() {
+  const now = Date.now();
+  const byId = new Map();
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i) || '';
+    if (!key.startsWith(`${CACHE_PREFIX}m|`)) continue;
+    const parts = key.split('|');
+    const entry = readCache(parts[2], parts[3]);
+    if (!entry || !Array.isArray(entry.events)) continue;
+    for (const m of entry.events) {
+      if (m && new Date(m.start).getTime() > now && !byId.has(m.id)) byId.set(m.id, m);
+    }
+  }
+  return [...byId.values()].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+}
+
+function computeFollowNext() {
+  const upcoming = cachedUpcomingMatches();
+  return state.followed.map((rec) => upcoming.find((m) => recordMatches(rec, m.home) || recordMatches(rec, m.away)) || null);
+}
+
+/* 面板关着不计算；开着时用缓存好的结果 */
+function followNextList() {
+  const panel = $('#followManager');
+  if (panel && panel.hasAttribute('hidden')) return null;
+  if (!followNextMemo) followNextMemo = computeFollowNext();
+  return followNextMemo;
+}
+
+function followNextText(m) {
+  if (!m) return '暂无已缓存赛程';
+  const d = new Date(m.start);
+  const when = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return `已缓存下一场赛程：${when} · ${leagueZh(m.league) || m.league} · ${teamName(m.home)} vs ${teamName(m.away)}`;
+}
+
+function focusFollowToggle() {
+  const toggle = $('#followToggle');
+  if (toggle && toggle.focus) toggle.focus({ preventScroll: true });
+}
+
+function renderFollow() {
+  const count = state.followed.length;
+  const countEl = $('#followCount');
+  if (countEl) countEl.textContent = count ? String(count) : '';
+  const host = $('#followTeams');
+  if (!host) return;
+  const active = document.activeElement;
+  let restoreIdx = active && active.closest && active.closest('#followTeams') && active.dataset && active.dataset.followIdx != null
+    ? Number(active.dataset.followIdx) : null;
+  if (pendingFollowFocus != null) {
+    restoreIdx = pendingFollowFocus;
+    pendingFollowFocus = null;
+  }
+  if (!count) {
+    host.innerHTML = `<div class="follow-empty">还没有关注球队；点赛程里的 ☆ 即可关注。</div>`;
+    if (restoreIdx != null) focusFollowToggle(); /* 删空了：焦点回到面板开关，不落到 body */
+    return;
+  }
+  const nextList = followNextList();
+  host.innerHTML = state.followed.map((rec, idx) => {
+    const name = followDisplayName(rec);
+    const meta = followMetaText(rec);
+    const next = nextList ? nextList[idx] : undefined;
+    return (
+      `<div class="follow-team">` +
+      `<span class="follow-team-name">${esc(name)}</span>` +
+      (meta ? `<span class="follow-team-meta">${esc(meta)}</span>` : '') +
+      (next === undefined ? '' : `<span class="follow-team-next">${esc(followNextText(next))}</span>`) +
+      `<button type="button" class="follow-remove" data-follow-idx="${idx}" aria-label="${esc('取消关注 ' + name)}">移除</button>` +
+      `</div>`
+    );
+  }).join('');
+  if (restoreIdx != null) {
+    /* 原行已销毁：接住焦点放到下一条（同下标），删的是最后一条则退到上一条 */
+    const want = Math.min(restoreIdx, state.followed.length - 1);
+    const back = [...host.querySelectorAll('[data-follow-idx]')].find((b) => Number(b.dataset.followIdx) === want);
+    if (back) back.focus({ preventScroll: true });
+    else focusFollowToggle();
+  }
+}
+
+/* 名称未知的旧 id-only 档案：诚实占位，不编造队名；观察到比赛后由补全逻辑填上 */
+function followDisplayName(rec) {
+  if (rec.name) return teamName(rec);
+  if (rec.id) return `ID ${rec.id} · 名称未知`;
+  if (rec.names && rec.names.length) return `${rec.names[0]}（名称待确认）`;
+  return '未知球队';
+}
+
+function followMetaText(rec) {
+  const lg = (rec.leagues || []).map((id) => leagueZh(id) || id);
+  const parts = [lg.length ? lg.join(' · ') : '联赛未知'];
+  if (rec.name && rec.id) parts.push(`ID ${rec.id}`);
+  return parts.join(' · ');
+}
+
+function toggleFollowPanel() {
+  const panel = $('#followManager');
+  const toggle = $('#followToggle');
+  if (!panel || !toggle) return;
+  const open = panel.hasAttribute('hidden');
+  if (open) panel.removeAttribute('hidden');
+  else panel.setAttribute('hidden', '');
+  toggle.setAttribute('aria-expanded', String(open));
+  /* 开/关都重绘：打开时计算“已缓存下一场赛程”，关闭时清掉行内提示（关闭态不再计算） */
+  invalidateFollowNext();
+  renderFollow();
+}
+
 function render() {
   renderDays();
   renderChips();
+  renderFollow();
   renderList();
 }
 
 /* ---------- 加载与轮询 ---------- */
 
-/* 空日期的补全：找上/下一个比赛日与关注球队预览（网络慢时独立于首屏渲染） */
+/* 空日期的补全：找上/下一个比赛日与关注球队预览（网络慢时独立于首屏渲染）。
+ * 关注球队可能来自被筛掉的联赛，故抓取/缓存用「启用 ∪ 已知关注联赛」并集只扫一遍；
+ * 但 generic 的 prev/next 只按启用联赛计数（其他比赛遵守筛选语义），
+ * 关注的 favPrev/favNext 按并集计数；预览加载：关注场次用并集，普通场次用启用联赛。 */
 async function enrichEmptyDay(seq) {
+  const enabled = [...state.enabled];
+  const union = [...new Set([...enabled, ...followedLeagues()])];
   const nearby = await findNearbyMatchdays(state.dayKey, {
-    leagues: [...state.enabled],
-    isFav: state.followed.size ? matchHasFollowed : null,
+    leagues: union,
+    genericLeagues: enabled,
+    favLeagues: union,
+    isFav: state.followed.length ? matchHasFollowed : null,
   });
   if (seq !== loadSeq) return;
   state.nearby = nearby;
@@ -565,8 +909,9 @@ async function enrichEmptyDay(seq) {
   const kind = f ? 'followed' : 'any';
   let preview = null;
   if (target) {
-    const pv = await loadDay(target.dayKey, { leagues: [...state.enabled] });
+    const pv = await loadDay(target.dayKey, { leagues: kind === 'followed' ? union : enabled });
     if (seq !== loadSeq) return;
+    enrichFollowedFromMatches(pv.matches);
     const rows = kind === 'followed' ? pv.matches.filter(matchHasFollowed) : pv.matches;
     preview = {
       dayKey: target.dayKey, kind, count: rows.length, total: pv.matches.length, matches: rows,
@@ -574,6 +919,7 @@ async function enrichEmptyDay(seq) {
     };
   }
   state.preview = preview;
+  invalidateFollowNext();
   render();
 }
 
@@ -591,6 +937,8 @@ async function reload(opts = {}) {
         /* 后台重验完成：静默替换为新数据 */
         if (seq !== loadSeq || state.dayKey !== fresh.dayKey) return;
         state.data = fresh;
+        enrichFollowedFromMatches(fresh.matches);
+        invalidateFollowNext();
         render();
         if (!fresh.matches.length && !fresh.pending && (!state.nearby || opts.preservePreview)) enrichEmptyDay(seq);
         scheduleLivePoll();
@@ -598,6 +946,8 @@ async function reload(opts = {}) {
     });
     if (seq !== loadSeq) return;
     state.data = data;
+    enrichFollowedFromMatches(data.matches);
+    invalidateFollowNext();
     if (!opts.preservePreview) {
       state.nearby = null;
       state.preview = null;
@@ -635,6 +985,8 @@ async function reloadWeek(opts = {}) {
     });
     if (seq !== loadSeq) return;
     state.weekDays = days;
+    enrichFollowedFromMatches(days.flatMap((d) => d.matches));
+    invalidateFollowNext();
     state.loading = false;
     render();
   } catch (e) {
@@ -645,6 +997,7 @@ async function reloadWeek(opts = {}) {
     return;
   }
   scheduleLivePoll();
+  schedulePrefetch();
 }
 
 function currentMatches() {
@@ -660,16 +1013,45 @@ function scheduleLivePoll() {
   if (hasLive) liveTimer = setTimeout(() => reload({ force: true }), LIVE_POLL_MS);
 }
 
-/* 预取前后相邻日期：数据层按“联赛×月”缓存，这里只是暖机，切日瞬间出数据 */
+/* 预取日期条：把窗口 7 天涉及的「联赛×月份」全部暖机（数据层按月缓存，天然去重）。
+   本次会话已失败的组合不再重复请求，避免导航时反复打失败接口。 */
 let prefetchTimer = null;
+const stripWarmFailed = new Set();
+
+function warmStripMonths() {
+  const pairs = new Set();
+  for (let i = 0; i < STRIP_LEN; i++) {
+    const key = addDays(state.windowStart, i);
+    for (const ym of monthsForDay(key)) {
+      for (const lg of state.enabled) pairs.add(`${lg}|${ym}`);
+    }
+  }
+  const list = [...pairs].filter((pair) => !stripWarmFailed.has(pair));
+  /* mapLimit 限并发：跨月日期条最多 22+ 组合，不能一次性全部压向网络 */
+  mapLimit(list, 6, async (pair) => {
+    const idx = pair.indexOf('|');
+    try {
+      const r = await ensureMonth(pair.slice(0, idx), pair.slice(idx + 1));
+      if (r && r.failed) { stripWarmFailed.add(pair); return false; } /* 真实抓取失败才记账；冷却期未尝试的下次再试 */
+      return !!(r && r.data);
+    } catch (e) {
+      stripWarmFailed.add(pair);
+      return false;
+    }
+  }).then((got) => {
+    /* 暖机到手后统一刷新一次打点与面板缓存赛程，避免每个组合各绘一遍 */
+    if (!got.some(Boolean)) return;
+    invalidateFollowNext();
+    renderDays();
+    renderFollow();
+  });
+}
+
 function schedulePrefetch() {
   clearTimeout(prefetchTimer);
   prefetchTimer = setTimeout(() => {
     if (document.hidden) return;
-    const leagues = [...state.enabled];
-    for (const key of [addDays(state.dayKey, -1), addDays(state.dayKey, 1)]) {
-      loadDay(key, { leagues }).catch(() => {});
-    }
+    warmStripMonths();
   }, 1500);
 }
 
@@ -679,7 +1061,7 @@ function gotoDay(dayKey) {
   const end = addDays(state.windowStart, STRIP_LEN - 1);
   if (dayKey < state.windowStart) state.windowStart = addDays(dayKey, -3);
   if (dayKey > end) state.windowStart = addDays(dayKey, 3 - STRIP_LEN + 1);
-  savePrefs();
+  saveDay();
   if (state.view === 'week') {
     render();
     const el = $(`#wday-${dayKey}`);
@@ -695,7 +1077,7 @@ function gotoDay(dayKey) {
 function setView(view) {
   if (state.view === view) return;
   state.view = view;
-  savePrefs();
+  saveView();
   if (view === 'week') {
     state.nearby = null;
     state.preview = null;
@@ -709,7 +1091,9 @@ function setView(view) {
 
 /* ---------- 日历导出（.ics） ----------
  * 把关注球队的未来赛程生成 iCalendar 文件供手机日历导入，事件自带开赛前 15 分钟提醒。
- * 纯前端生成，不上传任何数据；只按“关注球队所在联赛 × 未来两个月”拉数据，成本个位数请求。
+ * 纯前端生成，不上传任何数据；扫描全部已配置联赛（含已停用的）× 未来两个月的月度数据，
+ * 与日期视图共享本地缓存；缺失或过期回退的组合都计入“不完整”并在提示里如实标注，
+ * 绝不谎称“没有赛程”。
  */
 const ICS_DAYS = 60;
 const ICS_MATCH_SPAN_MS = 2 * 3600 * 1000;
@@ -782,7 +1166,7 @@ async function exportCalendar() {
   if (exportingIcs) return;
   const btn = $('#exportIcs');
   const note = $('#icsNote');
-  if (!state.followed.size) {
+  if (!state.followed.length) {
     if (note) note.textContent = '先点 ☆ 关注球队，再来导出';
     return;
   }
@@ -790,27 +1174,44 @@ async function exportCalendar() {
   if (btn) btn.disabled = true;
   try {
     if (note) note.textContent = '正在收集赛程…';
-    /* 只取关注球队所在联赛（缓存里出现过的），找不到再回落全部启用联赛 */
-    let leagues = cachedLeaguesOfFollowed(matchHasFollowed);
-    if (!leagues.length) leagues = [...state.enabled];
+    /* 覆盖全部已配置联赛（含已停用的）：关注球队可能来自被筛掉的联赛 */
+    const leagues = LEAGUES.map((l) => l.id);
     const todayKey = dayKeyOf(new Date());
     const yms = new Set();
     for (let i = 0; i < ICS_DAYS; i++) {
       for (const ym of monthsForDay(addDays(todayKey, i))) yms.add(ym);
     }
+    /* 区间 [今天, 今天+ICS_DAYS 天)（本机时区）：yms 覆盖末月整月，
+       只按 start>now 过滤会把第 61 天到月末的比赛也导出，必须按天截断 */
+    const rangeEnd = parseDayKey(addDays(todayKey, ICS_DAYS)).getTime();
     const jobs = [];
     for (const leagueId of leagues) for (const ym of yms) jobs.push({ leagueId, ym });
     const now = Date.now();
     const picked = new Map();
+    /* 不完整 = 拿不到数据（!data）或失败回退旧缓存（r.stale，能导出缓存赛事但可能缺改期/新赛程）。
+       两种都计入，结果里明确标注“不完整/可能遗漏”，绝不据此宣称“没有赛程”。 */
+    let incomplete = 0;
     await mapLimit(jobs, 6, async ({ leagueId, ym }) => {
-      const r = await ensureMonth(leagueId, ym);
-      for (const m of (r.data && r.data.events) || []) {
-        if (new Date(m.start).getTime() > now && matchHasFollowed(m)) picked.set(m.id, m);
+      let r = null;
+      try { r = await ensureMonth(leagueId, ym); } catch (e) { r = null; }
+      if (!r || !r.data) {
+        incomplete += 1;
+        return;
+      }
+      if (r.stale) incomplete += 1;
+      for (const m of (r.data.events || [])) {
+        const ts = new Date(m.start).getTime();
+        if (ts > now && ts < rangeEnd && matchHasFollowed(m)) picked.set(m.id, m);
       }
     });
     const rows = [...picked.values()].sort((a, b) => (a.start < b.start ? -1 : 1));
     if (!rows.length) {
-      if (note) note.textContent = `未来 ${ICS_DAYS} 天没有关注球队的赛程`;
+      /* 数据不全时绝不谎称“没有赛程”，如实说明无法确认 */
+      if (note) {
+        note.textContent = incomplete
+          ? `数据不完整（部分联赛数据过期或不可用），未能确认未来 ${ICS_DAYS} 天的赛程；请稍后重试`
+          : `未来 ${ICS_DAYS} 天没有关注球队的赛程`;
+      }
       return;
     }
     const blob = new Blob([buildIcs(rows, { title: '足球赛程 · 我的关注' })], { type: 'text/calendar;charset=utf-8' });
@@ -822,7 +1223,10 @@ async function exportCalendar() {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-    if (note) note.textContent = `已导出 ${rows.length} 场（开赛前 15 分钟提醒）`;
+    if (note) {
+      note.textContent = `已导出 ${rows.length} 场（开赛前 15 分钟提醒）` +
+        (incomplete ? '；部分联赛数据过期或不可用，可能有遗漏' : '');
+    }
   } catch (e) {
     if (note) note.textContent = '导出失败：' + ((e && e.message) || '未知错误');
   } finally {
@@ -854,14 +1258,14 @@ function bind() {
     if (state.enabled.has(id)) state.enabled.delete(id);
     else state.enabled.add(id);
     if (!state.enabled.size) state.enabled.add(id);
-    savePrefs();
+    saveEnabled();
     render();
     reload();
   });
   $('#list').addEventListener('click', (e) => {
     const star = e.target.closest('[data-star]');
     if (star) {
-      toggleFollow({ name: star.dataset.star, teamId: star.dataset.teamId });
+      toggleFollow({ name: star.dataset.star, teamId: star.dataset.teamId, league: star.dataset.league || null });
       return;
     }
     const goto = e.target.closest('[data-goto]');
@@ -873,6 +1277,13 @@ function bind() {
   });
   $('#refresh').addEventListener('click', () => reload({ force: true }));
   $('#exportIcs') && $('#exportIcs').addEventListener('click', exportCalendar);
+  $('#followToggle') && $('#followToggle').addEventListener('click', toggleFollowPanel);
+  $('#followTeams') && $('#followTeams').addEventListener('click', (e) => {
+    const rm = e.target.closest('[data-follow-idx]');
+    if (rm) unfollowAt(Number(rm.dataset.followIdx));
+  });
+  /* 跨标签页同步：只回读相关键并重绘；本处理不写任何偏好，按键保存也保证关注/翻日操作不互相覆盖 */
+  window.addEventListener('storage', onStorageEvent);
   scheduleCountdownTick();
   /* 标签页隐藏时停掉直播轮询，切回前台立即补一次 */
   document.addEventListener('visibilitychange', () => {
