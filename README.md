@@ -1,11 +1,38 @@
 # 赛程 · 每日足球
 
 每天打开看一眼赛程的小页面：无广告、无推荐、无新闻，只有比赛。
-双击 `index.html` 即可使用，不需要安装任何东西，不需要服务器。
+使用 React + Vite 构建，仍然作为静态网站部署到 GitHub Pages。
+
+## 本地开发
+
+需要 Node.js 22.12 或更新版本。
+
+```bash
+npm ci
+npm run dev
+```
+
+打开终端显示的 `/football-schedule/` 地址。预览生产构建：
+
+```bash
+npm run build
+npm run preview
+```
+
+直接双击源文件 `index.html` 不再是运行方式。页面用户继续通过网站或已安装的 PWA 使用，无需安装 Node.js。
+
+验证改动：
+
+```bash
+node --test tests/regression.test.js
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
 
 ## 使用
 
-- 双击 `index.html`（默认浏览器打开即可，Chrome / Edge 都行）。
+- 打开已部署网站，或使用上面的本地开发地址。
 - 球队名旁的 ☆ 点一下即关注（★）。关注的球队当天的比赛会置顶到"★ 我的关注"（带赛事标签），
   日期条实心圆点表示有已知的关注球队比赛（含关闭赛事），空心表示其他已开启赛事有比赛，半灰表示所选赛事的赛程未知（缓存缺失或过期）。
 - 工具栏“关注”按钮展开/收起关注管理面板：面板按球队列出已关注项（中文名、赛事），每行附一行“赛程预览”（该队在本地月缓存里的未来比赛，
@@ -42,10 +69,10 @@
 
 手机浏览器（Safari / Chrome）打开后“添加到主屏幕”，就像独立 App 一样使用。
 已安装的 PWA 可离线打开页面并查看**已缓存月份**的赛程；未缓存的日期无法离线获取，会显示重新加载。
-本地队徽在访问相关比赛时按需缓存；未加载过的队徽和只能从远程回退的新球队图标，离线时可能缺失。PC 上仍可双击 `index.html`，两种用法并存。
+本地队徽在访问相关比赛时按需缓存；未加载过的队徽和只能从远程回退的新球队图标，离线时可能缺失。PC 可打开部署网站或本地开发服务。
 
 PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生效；
-远程赛程不由 Service Worker 离线回退，以便准确提示缓存过期。`file://` 打开时自动静默降级。
+远程赛程不由 Service Worker 离线回退，以便准确提示缓存过期。开发服务不注册 Service Worker；生产预览和部署网站注册并验证缓存。
 部署位置是 GitHub Pages 项目站点，与 `<user>.github.io` 个人主页共存；仓库已公开以启用免费 Pages。
 
 ## 数据源：一般怎么解决
@@ -80,20 +107,34 @@ PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生
 
 | 文件 | 作用 |
 | --- | --- |
-| `index.html` | 页面骨架，双击入口 |
-| `styles.css` | 样式（「深夜球场 · 赛程公报」：墨绿黑底 + 荧光黄绿点缀，巨型日期海报头 + 编辑排版） |
+| `index.html` / `src/main.tsx` | Vite 和 React 入口 |
+| `styles.css` | 样式（系统浅/深色、蓝色强调、分组卡片） |
 | `config.js` | 俱乐部/国家队赛事列表、默认开启项 |
 | `team-names.js` | 球队中文名对照表（含队名归一化） |
-| `logos/` | 本地队徽/联赛标（64px，随项目分发，打开页面 0 网络请求） |
+| `logos/` | 本地队徽/联赛标（64px，随项目分发，可缓存后离线使用） |
 | `tools/zh-coverage.html` | 队名覆盖检查：列出未收录中文名的球队 |
 | `tools/refresh-logos.js` | 图标刷新：下载/更新 logos/（新赛季或加联赛后跑一次） |
 | `data.js` | 数据层：ESPN 抓取、归一化、按月缓存、时区分桶、空日就近搜索 |
-| `app.js` | 界面层：日期/联赛切换、关注管理与多标签同步、渲染、直播自动刷新 |
+| `app.js` | 状态、动作、加载顺序、轮询和偏好同步 |
+| `src/components/` | 日期栏、赛事筛选、关注管理、赛程列表及比赛行 |
+| `src/domain/` | 关注匹配、球队搜索和日期格式 |
+| `src/types.ts` | 界面与数据接口的 TypeScript 类型 |
+| `vite.config.ts` | 构建、静态资源与 PWA 缓存清单 |
 | `manifest.webmanifest` / `icons/` | PWA 清单与应用图标（安装到手机主屏用） |
 | `sw.js` | Service Worker：应用壳缓存，托管后离线可用 |
 | `tests/regression.test.js` | 数据缺失、过期缓存、跨月与邻近比赛日回归测试 |
 
-维护时可运行 `node --test tests/regression.test.js`；页面本身不需要 Node.js。
+维护时运行回归测试、构建和浏览器测试。浏览器运行构建产物，不需要 Node.js。
+
+## 部署与迁移
+
+合并迁移 PR 前，在仓库 **Settings → Pages → Source** 将发布源设为 **GitHub Actions**。若已先合并，切换来源后手动运行 `deploy` 工作流即可发布。`deploy.yml` 安装依赖、运行回归测试、构建 `dist/` 并发布。
+
+赛程快照继续每三小时更新。快照工作流提交数据后显式构建并发布，确保机器人提交不会漏掉部署。
+
+构建时复制 `logos/`、`icons/` 和 `snapshot/`。`vite.config.ts` 将真实 JS/CSS 文件清单写入产物 `sw.js`，缓存版本由 HTML 和资源清单生成。以后无需手动给脚本加 `?v=`。
+
+现有 `fs1.enabled`、`fs1.followed`、日期/视图偏好和月缓存格式保持兼容。已有 PWA 更新时继续使用同一个路径和清单。
 页面文案、状态提示和操作命名遵循 [文案与反馈约定](docs/ui-copy.md)。
 
 ## 常见改动
@@ -101,7 +142,7 @@ PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生
 - **加/减赛事**：`config.js` 里 `LEAGUES` 增删一行（`id` 为 ESPN 赛事标识，如 `por.1` 葡超、`fifa.friendly` 国际友谊赛）；国家队赛事加 `group: 'national'`。
   增加后跑一次 `node tools/refresh-logos.js` 把新赛事队徽下载到本地；仅刷新国家队可运行 `node tools/refresh-logos.js --national`。再运行 `node tools/build-snapshot.js` 和 `node tools/build-teams-snapshot.js` 更新赛程和球队名单，部署后由原有定时工作流继续每 3 小时更新。
 - **球队中文名**：`team-names.js` 增加一行；大小写、音调、`FC`/`AS` 前缀后缀等写法差异会自动归一，
-  不用为同一支球队写多条。查漏有两个途径：双击 `tools/zh-coverage.html`，一次列出所有联赛里还没收录的队名
+  不用为同一支球队写多条。查漏有两个途径：访问 `/football-schedule/tools/zh-coverage.html`，一次列出所有联赛里还没收录的队名
   （附可直接粘贴的空条目）；或平时看球时留意浏览器 console 的“未收录中文名”提示。
 - **换数据源**：只需重写 `data.js` 的 `fetchMonth`（拉原始数据）与 `normalizeEvent`（归一化为
   `{id, league, start, status, minute, home, away}`，其中 `home/away = {name, teamId, logo, score, winner}`），
