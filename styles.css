@@ -206,8 +206,12 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .filters { padding: 12px 20px 0; }
 
 .filter-toolbar {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 10px; min-width: 0;
 }
+
+.filter-summary { display: flex; align-items: baseline; gap: 10px; }
+.filter-label { font-size: 14px; font-weight: 600; }
+.filter-summary-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 
 .filter-toggle {
   display: none;
@@ -218,6 +222,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 .filter-toggle:hover { background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+.filter-toggle-text { margin-left: auto; color: var(--muted); font-size: 12px; }
 .filter-toggle::after {
   content: "▾"; font-size: 11px; color: var(--muted);
   transition: transform 0.15s;
@@ -344,21 +349,40 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   color: var(--muted); font-size: 13px;
 }
 
-.chips { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
-.chip-group { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
-.chip-group-label { flex: none; color: var(--muted); font-size: 12px; }
-.chip-options { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.chips { display: grid; gap: 12px; margin-top: 12px; }
+.chip-group { min-width: 0; padding: 14px; background: var(--card); border-radius: 12px; }
+.chip-group-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding-bottom: 12px;
+}
+.chip-group-label { color: var(--paper); font-size: 13px; font-weight: 600; }
+.chip-group-count { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chip-options { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
 
 .chip {
-  border: 1px solid transparent; background: var(--card); color: var(--muted);
-  min-height: 38px; padding: 3px 13px; border-radius: 999px; cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0;
+  border: 1px solid var(--line-soft); background: var(--card); color: var(--paper);
+  min-height: 48px; padding: 8px 10px; border-radius: 8px; cursor: pointer;
   font-family: var(--body); font-size: 12.5px;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
-.chip:hover { color: var(--paper); }
+.chip-name { min-width: 0; text-align: left; overflow-wrap: anywhere; }
+.chip-check {
+  display: grid; place-items: center; flex: none; width: 16px; height: 16px;
+  border: 1px solid var(--line); border-radius: 50%;
+}
+.chip-check svg { width: 14px; height: 14px; visibility: hidden; }
+.chip:hover { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
 .chip.on {
-  background: var(--accent); border-color: var(--accent);
-  color: var(--on-accent); font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 9%, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent); font-weight: 600;
+}
+.chip.on .chip-check { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.chip.on .chip-check svg { visibility: visible; }
+
+@media (min-width: 641px) and (max-width: 800px) {
+  .chip-options { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 /* ---------- 赛程列表 ---------- */
@@ -582,12 +606,15 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .days::-webkit-scrollbar { height: 5px; }
   .days::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 5px; }
   .days::-webkit-scrollbar-track { background: var(--ink-2); }
-  .filter-toolbar { flex-wrap: wrap; }
-  .filter-toggle { display: inline-flex; }
+  .filter-toolbar { flex-direction: column; align-items: stretch; gap: 8px; }
+  .filter-summary { display: none; }
+  .filter-toggle { display: inline-flex; width: 100%; text-align: left; }
+  .secondary-actions { margin-left: 0; justify-content: flex-end; gap: 6px; }
+  .secondary-actions .view-seg { margin-right: auto; }
   .filters { padding-inline: 12px; }
   .filters:not(.is-open) .chips { display: none; }
-
-  .chip { min-height: 44px; }
+  .chip-group { padding: 12px; }
+  .chip-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .top { padding-inline: 12px; }
   .sticky-bar { padding-inline: 12px; }
   .list { padding-inline: 12px; }
