@@ -3,7 +3,7 @@
  *
  * 新设备首次打开时本地没有缓存，若浏览器直连 ESPN 慢或不通就会一直“加载中”。
  * 本脚本由 GitHub Actions 定时运行（.github/workflows/refresh-snapshot.yml），
- * 把所有联赛「上月 ~ 后两个月」的整月赛程拉下来，按 data.js 同一套归一化写成与本地缓存
+ * 把所有赛事「上月 ~ 后两个月」的整月赛程拉下来，按 data.js 同一套归一化写成与本地缓存
  * 同格式的条目，随页面同源部署；前端冷启动时先用它出数据，再在后台联网更新。
  *
  * - 某联赛某月抓取失败：沿用上一份快照里的旧条目，不让一次抖动清空数据
@@ -30,8 +30,8 @@ const { LEAGUES } = require(path.join(root, 'config.js'));
 /* 复用数据层的归一化，保证与浏览器缓存格式一致 */
 const ctx = vm.createContext({ window: {}, Intl, AbortController, setTimeout, clearTimeout, fetch, console });
 vm.runInContext(fs.readFileSync(path.join(root, 'data.js'), 'utf8'), ctx, { filename: 'data.js' });
-const { ESPN_BASE, normalizeEvent, normalizeLeagueMeta, etBucketOf } =
-  vm.runInContext('({ ESPN_BASE, normalizeEvent, normalizeLeagueMeta, etBucketOf })', ctx);
+const { ESPN_BASE, normalizeMonthData, etBucketOf } =
+  vm.runInContext('({ ESPN_BASE, normalizeMonthData, etBucketOf })', ctx);
 
 /* 与 data.js 的月份口径一致：按美东日期取“上月、本月、后两个月” */
 function monthsWindow() {
@@ -93,13 +93,10 @@ async function main() {
   const entries = await mapLimit(jobs, CONCURRENCY, async ({ id, ym }) => {
     const key = `${id}|${ym}`;
     try {
-      const json = await fetchJson(`${ESPN_BASE}/${id}/scoreboard?dates=${ym}`);
+      const json = await fetchJson(`${ESPN_BASE}/${id}/scoreboard?dates=${ym}&limit=1000`);
+      const data = normalizeMonthData(json, id, now);
       ok++;
-      return [key, {
-        fetchedAt: now,
-        league: normalizeLeagueMeta(json, id),
-        events: (json.events || []).map((ev) => normalizeEvent(ev, id)),
-      }];
+      return [key, data];
     } catch (e) {
       failed.push(`${key} (${e.message})`);
       return prevMonths[key] ? [key, prevMonths[key]] : null;

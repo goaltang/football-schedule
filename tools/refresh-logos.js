@@ -1,5 +1,5 @@
 /* 刷新本地图标库：把各联赛的队徽与联赛标（64px 缩略图）下载到 logos/
- * 用法：node tools/refresh-logos.js
+ * 用法：node tools/refresh-logos.js [--national]（只刷新国家队赛事）
  * 什么时候跑：新赛季、config.js 增加联赛后、或发现新球队图标缺失时
  * 依赖 curl（Windows 10+ 自带）；下载失败会重试 3 次并在最后汇总
  */
@@ -17,7 +17,7 @@ const OUT = path.join(__dirname, '..', 'logos');
 async function curlBuf(url) {
   const { stdout } = await execFileP(
     'curl',
-    ['-sS', '--retry', '3', '--retry-delay', '1', '--retry-all-errors', '-m', '30', url],
+    ['-fsS', '--retry', '3', '--retry-delay', '1', '--retry-all-errors', '-m', '30', url],
     { encoding: 'buffer', maxBuffer: 8 * 1024 * 1024 }
   );
   return stdout;
@@ -47,12 +47,15 @@ async function mapLimit(items, limit, fn) {
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
   const jobs = [];
-  for (const lg of LEAGUES) {
+  const failed = [];
+  const leagues = process.argv.includes('--national') ? LEAGUES.filter((lg) => lg.group === 'national') : LEAGUES;
+  for (const lg of leagues) {
     let json;
     try {
-      json = await curlJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/${lg.id}/teams`);
+      json = await curlJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/${lg.id}/teams?limit=1000`);
     } catch (e) {
       console.warn(`[${lg.zh}] 球队列表拉取失败: ${e.message}`);
+      failed.push(`${lg.zh}|teams (${e.message})`);
       continue;
     }
     const league = (json.sports && json.sports[0].leagues[0]) || {};
@@ -64,6 +67,7 @@ async function mapLimit(items, limit, fn) {
       if (crest) jobs.push({ file: `lg-${lg.id}.png`, url: small(crest.href) });
     } catch (e) {
       console.warn(`[${lg.zh}] 联赛标拉取失败: ${e.message}`);
+      failed.push(`${lg.zh}|logo (${e.message})`);
     }
     for (const t of (league.teams || [])) {
       const logo = (t.team.logos && t.team.logos[0] && t.team.logos[0].href) || t.team.logo;
@@ -74,10 +78,13 @@ async function mapLimit(items, limit, fn) {
 
   const uniq = [...new Map(jobs.map((j) => [j.file, j])).values()];
   let ok = 0;
-  const failed = [];
   await mapLimit(uniq, 6, async (j) => {
     try {
-      fs.writeFileSync(path.join(OUT, j.file), await curlBuf(j.url));
+      const bytes = await curlBuf(j.url);
+      if (!bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+        throw new Error('response is not a PNG image');
+      }
+      fs.writeFileSync(path.join(OUT, j.file), bytes);
       ok++;
     } catch (e) {
       failed.push(`${j.file} (${e.message})`);

@@ -27,7 +27,7 @@ async function fetchTeams(lg) {
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${lg}/teams`, { cache: 'no-store' });
+      const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${lg}/teams?limit=1000`, { cache: 'no-store' });
       const json = await res.json();
       return ((json.sports[0].leagues[0].teams) || []).map((t) => t.team.displayName);
     } catch (e) {

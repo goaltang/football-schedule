@@ -263,9 +263,19 @@ function matchHasFollowed(m) {
   return !!m && (isFollowed(m.home) || isFollowed(m.away));
 }
 
+function isNationalFollow(rec) {
+  return (rec.leagues || []).some((id) => NATIONAL_LEAGUES.includes(id));
+}
+
 function followedLeagues() {
   const out = new Set();
   for (const rec of state.followed) for (const lg of rec.leagues || []) out.add(lg);
+  /* 从一场友谊赛关注国家队时，只知道当前赛事；同时查询其余国家队赛事，
+     不依赖球队曾在其他赛事出场或名单是否包含它，避免漏掉预选赛/杯赛。
+     这里只扩大查询范围，其他国家队仍遵守赛事筛选，不写入关注档案。 */
+  if (NATIONAL_LEAGUES.some((id) => out.has(id))) {
+    for (const id of NATIONAL_LEAGUES) out.add(id);
+  }
   return [...out];
 }
 
@@ -325,12 +335,13 @@ function enrichFollowedFromMatches(matches) {
   return changed;
 }
 
-function followChanged() {
+function followChanged(opts = {}) {
   invalidateFollowNext();
   saveFollowed();
   render();
   /* 空日关注变化要重算预览，但保留旧预览直到新结果就绪，避免键盘焦点丢失。 */
-  if (state.data && !state.data.matches.length) reload({ preservePreview: true });
+  // 国家队可来自搜索或已关闭的赛事，关注变化后立即按新范围重取当前日/周。
+  if (opts.national || (state.data && !state.data.matches.length)) reload({ preservePreview: true });
 }
 
 function toggleFollow(team) {
@@ -338,6 +349,8 @@ function toggleFollow(team) {
   const tid = teamSideId(team);
   const name = team.name && team.name !== UNKNOWN_TEAM_NAME ? team.name : null;
   if (!tid && !name) return;
+  const national = [team.league, ...(team.leagues || [])].some((id) => NATIONAL_LEAGUES.includes(id))
+    || state.followed.some((rec) => recordMatches(rec, team) && isNationalFollow(rec));
   const on = isFollowed(team);
   if (on) {
     /* 只移除与该队匹配的档案，不碰无关关注 */
@@ -346,7 +359,7 @@ function toggleFollow(team) {
     const leagues = team.leagues || (team.league ? [team.league] : []);
     state.followed.push(mkFollowRecord(tid, name, name ? nameKeys(team) : [], leagues));
   }
-  followChanged();
+  followChanged({ national });
 }
 
 /* 被删行正持有焦点时记住下标，重绘后把焦点交给下一条/上一条或面板开关 */
@@ -356,8 +369,9 @@ function unfollowAt(idx) {
   if (!Number.isInteger(idx) || idx < 0 || idx >= state.followed.length) return;
   const active = document.activeElement;
   if (active && active.dataset && active.dataset.followIdx === String(idx)) pendingFollowFocus = idx;
+  const national = isNationalFollow(state.followed[idx]);
   state.followed.splice(idx, 1);
-  followChanged();
+  followChanged({ national });
 }
 
 /* ---------- 球队搜索 ----------
@@ -387,6 +401,12 @@ function buildCatalog(perLeague) {
         byId.set(t.id, e);
       }
       if (!e.leagues.includes(leagueId)) e.leagues.push(leagueId);
+      if (NATIONAL_LEAGUES.includes(leagueId)) {
+        for (const name of [`${e.zh}队`, `${e.zh}国家队`]) {
+          const key = searchKey(name);
+          if (!e.keys.includes(key)) e.keys.push(key);
+        }
+      }
     }
   }
   return [...byId.values()];
@@ -599,6 +619,7 @@ function onStorageEvent(e) {
   if (key !== null && key !== LS_FOLLOWED && key !== LS_ENABLED) return;
   const followedChanged = key === null || key === LS_FOLLOWED;
   const enabledChanged = key === null || key === LS_ENABLED;
+  const nationalBefore = JSON.stringify(state.followed.filter(isNationalFollow));
   if (followedChanged) state.followed = loadFollowed();
   if (enabledChanged) state.enabled = loadEnabled();
   invalidateFollowNext();
@@ -607,6 +628,10 @@ function onStorageEvent(e) {
     state.data = null;
     state.weekDays = null;
     reload();
+    return;
+  }
+  if (followedChanged && nationalBefore !== JSON.stringify(state.followed.filter(isNationalFollow))) {
+    reload({ preservePreview: true });
     return;
   }
   /* 关注变化：空日预览可能要重算；有比赛的日期 render 已覆盖 */
@@ -622,7 +647,7 @@ function onStorageEvent(e) {
 const DAY_DOT_TEXT = {
   fill: '有关注球队比赛',
   hollow: '有其他比赛',
-  off: '无所选联赛比赛',
+  off: '无所选赛事比赛',
   unk: '赛程未知',
 };
 
@@ -681,13 +706,20 @@ function renderDays() {
 
 function renderChips() {
   const focused = $('#chips').contains(document.activeElement) ? document.activeElement.dataset.league : null;
-  $('#chips').innerHTML = LEAGUES.map((lg) => {
-    const on = state.enabled.has(lg.id);
-    return `<button class="chip${on ? ' on' : ''}" data-league="${lg.id}" aria-pressed="${on}" title="${esc(lg.en)}">${esc(lg.zh)}</button>`;
-  }).join('');
+  $('#chips').innerHTML = [
+    { label: '俱乐部', items: LEAGUES.filter((lg) => lg.group !== 'national') },
+    { label: '国家队', items: LEAGUES.filter((lg) => lg.group === 'national') },
+  ].map(({ label, items }) =>
+    `<div class="chip-group" role="group" aria-label="${label}赛事">` +
+    `<span class="chip-group-label" aria-hidden="true">${label}</span><div class="chip-options">` +
+    items.map((lg) => {
+      const on = state.enabled.has(lg.id);
+      return `<button class="chip${on ? ' on' : ''}" data-league="${lg.id}" aria-pressed="${on}" title="${esc(lg.en)}">${esc(lg.zh)}</button>`;
+    }).join('') + '</div></div>'
+  ).join('');
   $('#filterCount').textContent = `${state.enabled.size}/${LEAGUES.length}`;
   if (focused) {
-    const button = [...$('#chips').children].find((chip) => chip.dataset.league === focused);
+    const button = [...$('#chips').querySelectorAll('[data-league]')].find((chip) => chip.dataset.league === focused);
     if (button) button.focus({ preventScroll: true });
   }
 }
@@ -859,7 +891,7 @@ function renderWeek() {
       : state.error ? '暂时无法更新本周赛程。' : '部分日期的赛程未能加载。';
     parts.push(`<div class="panel"><p>${all.length ? note : UI_TEXT.unconfirmed}</p><p class="sub">${all.length ? '可重新加载查看最新赛程。' : '暂时无法确认本周是否有比赛，请稍后重新加载。'}</p><button class="btn" id="retry">${UI_TEXT.retry}</button></div>`);
   } else if (!all.length) {
-    parts.push(`<div class="panel"><p>${UI_TEXT.emptyWeek}</p><p class="sub">可切换日期或调整联赛筛选。</p></div>`);
+    parts.push(`<div class="panel"><p>${UI_TEXT.emptyWeek}</p><p class="sub">可切换日期或调整赛事筛选。</p></div>`);
   }
   root.innerHTML = parts.join('');
   if (focused) {
@@ -971,8 +1003,8 @@ function renderList() {
       );
     } else {
       parts.push(
-        `<div class="panel empty"><p>当天暂无所选联赛或关注球队的比赛</p>` +
-        `<p class="sub">可切换日期或调整联赛筛选。</p>` +
+        `<div class="panel empty"><p>当天暂无所选赛事或关注球队的比赛</p>` +
+        `<p class="sub">可切换日期或调整赛事筛选。</p>` +
         `<div class="nearby">${nearBtn(nb.prev, '← 查看更早比赛')}${nearBtn(nb.next, '查看之后比赛 →')}</div></div>`
       );
     }

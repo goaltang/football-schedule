@@ -10,6 +10,159 @@ const root = path.join(__dirname, '..');
 const dataSource = fs.readFileSync(path.join(root, 'data.js'), 'utf8');
 const appSource = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 
+test('national competition filters preserve saved club choices and keyboard focus', () => {
+  const h = harness([['fs1.enabled', '["eng.1","esp.1"]']], true);
+  assert.deepEqual([...h.call('loadEnabled()')], ['eng.1', 'esp.1']);
+  h.call('renderChips()');
+  assert.match(h.elements['#chips'].innerHTML, /aria-label="俱乐部赛事"/);
+  assert.match(h.elements['#chips'].innerHTML, /aria-label="国家队赛事"/);
+  assert.match(h.elements['#chips'].innerHTML, /data-league="fifa.friendly" aria-pressed="false"/);
+  assert.equal(h.elements['#filterCount'].textContent, `2/${h.call('LEAGUES.length')}`);
+  let restored = false;
+  h.elements['#chips'].contains = () => true;
+  h.context.document.activeElement = { dataset: { league: 'fifa.friendly' } };
+  h.elements['#chips'].querySelectorAll = () => [{ dataset: { league: 'fifa.friendly' }, focus: () => { restored = true; } }];
+  h.call('state.enabled.add("fifa.friendly"); saveEnabled(); renderChips()');
+  assert.equal(restored, true);
+  assert.match(h.elements['#chips'].innerHTML, /data-league="fifa.friendly" aria-pressed="true"/);
+  assert.deepEqual(JSON.parse(h.storage.getItem('fs1.enabled')), ['eng.1', 'esp.1', 'fifa.friendly']);
+});
+
+test('national team search merges competitions and supports Chinese names and nicknames', () => {
+  const h = harness([], true);
+  h.context.catalog = h.call(`buildCatalog([
+    { leagueId: 'fifa.friendly', teams: [
+      { id: '560', name: 'China', short: '', logo: '' },
+      { id: '202', name: 'Argentina', short: '', logo: '' },
+      { id: '203', name: 'Brazil', short: '', logo: '' }] },
+    { leagueId: 'fifa.worldq.afc', teams: [{ id: '560', name: 'China', short: '', logo: '' }] },
+  ])`);
+  for (const q of ['国足', '中国', '中国队', '中国国家队', '中国男足', 'China PR']) {
+    assert.deepEqual([...h.call(`searchTeams(catalog, ${JSON.stringify(q)}).map((e) => e.id)`)], ['560']);
+  }
+  for (const q of ['阿根廷', 'Argentina', '阿根廷队']) {
+    assert.deepEqual([...h.call(`searchTeams(catalog, ${JSON.stringify(q)}).map((e) => e.id)`)], ['202']);
+  }
+  assert.equal(h.call('catalog.length'), 3);
+  assert.deepEqual([...h.call('catalog.find((t) => t.id === "560").leagues')], ['fifa.friendly', 'fifa.worldq.afc']);
+  assert.equal(h.call('zhName("Türkiye")'), '土耳其');
+  assert.equal(h.call('zhName("Congo DR")'), '刚果民主共和国');
+  assert.equal(h.call('zhName("Congo")'), '刚果共和国');
+});
+
+test('following a national team from one match finds its disabled qualifiers and cup matches', async () => {
+  const h = harness([], true);
+  const day = futureDayKey(2);
+  h.call('state.enabled = new Set(["eng.1"]); state.data = null; state.followed = []');
+  h.call('let reloadCalls = 0; reload = () => { reloadCalls++; }');
+  h.call('toggleFollow({ name: "China", teamId: "560", league: "fifa.friendly" })');
+  const make = (id, league, home) => ({
+    id, league, start: new Date(`${day}T12:00:00`).toISOString(), status: 'SCHEDULED',
+    home: { teamId: home === 'China' ? '560' : '203', name: home }, away: { teamId: '999', name: 'Japan' },
+  });
+  for (const league of h.call('fetchLeagues()')) {
+    for (const ym of h.call(`monthsForDay(${JSON.stringify(day)})`)) {
+      const events = league === 'fifa.worldq.afc' ? [make('qualifier', league, 'China')]
+        : league === 'afc.asian.cup' ? [make('cup', league, 'China')]
+          : league === 'fifa.friendly' ? [make('other-national-team', league, 'Brazil')] : [];
+      seedMonth(h, league, ym, events);
+    }
+  }
+  const r = await h.call(`loadDayVisible(${JSON.stringify(day)})`);
+  assert.deepEqual([...r.matches.map((m) => m.id)].sort(), ['cup', 'qualifier']);
+  assert.deepEqual(JSON.parse(h.storage.getItem('fs1.followed'))[0].leagues, ['fifa.friendly']);
+  assert.ok(h.call('followedLeagues().includes("fifa.worldq.conmebol")'));
+  assert.equal(h.call('reloadCalls'), 1);
+  h.call('toggleFollow({ name: "China", teamId: "560", league: "fifa.friendly" })');
+  assert.deepEqual([...h.call('fetchLeagues()')], ['eng.1']);
+  assert.equal(h.call('reloadCalls'), 2);
+  h.call('toggleFollow({ name: "China", teamId: "560", league: "fifa.friendly" }); unfollowAt(0)');
+  assert.equal(h.call('reloadCalls'), 4);
+  assert.deepEqual([...h.call('fetchLeagues()')], ['eng.1']);
+});
+
+test('same-origin team lists support cold national-team search without contacting ESPN', async () => {
+  const h = harness();
+  const teams = [{ id: '560', name: 'China', short: '', logo: '' }, { id: '202', name: 'Argentina', short: '', logo: '' }];
+  const requests = [];
+  h.context.snap = { leagues: {
+    'fifa.friendly': { fetchedAt: Date.now(), teams },
+    'fifa.worldq.afc': { fetchedAt: Date.now(), teams: [teams[0]] },
+  } };
+  h.setFetch((url) => {
+    requests.push(String(url));
+    assert.equal(String(url), 'snapshot/teams.json');
+    return { ok: true, json: async () => h.context.snap };
+  });
+  const results = await h.call('Promise.all([ensureTeams("fifa.friendly"), ensureTeams("fifa.worldq.afc")])');
+  assert.equal(requests.length, 1);
+  assert.equal(results[0].teams.length, 2);
+  assert.equal(results[1].teams[0].name, 'China');
+  assert.equal(results[0].failed, false);
+  assert.equal(results[0].stale, false);
+  await h.call('ensureTeams("fifa.friendly")');
+  assert.equal(requests.length, 1);
+});
+
+test('national follow changes from another tab reload the view without rewriting preferences', () => {
+  const h = harness([['fs1.enabled', '["eng.1"]']], true);
+  h.call('let nationalReloads = 0; reload = () => { nationalReloads++; }; state.followed = []');
+  const dayBefore = h.call('state.dayKey');
+  h.storage.setItem('fs1.followed', JSON.stringify([{ id: '658', name: 'China', names: ['china'], leagues: ['fifa.friendly'] }]));
+  let writes = 0;
+  const set = h.storage.setItem;
+  h.storage.setItem = (...args) => { writes++; set(...args); };
+  h.fireWindow('storage', { key: 'fs1.followed' });
+  assert.equal(h.call('nationalReloads'), 1);
+  assert.ok(h.call('fetchLeagues().includes("afc.asian.cup")'));
+  assert.equal(h.call('state.dayKey'), dayBefore);
+  assert.equal(writes, 0);
+  set('fs1.followed', '[]');
+  h.fireWindow('storage', { key: 'fs1.followed' });
+  assert.equal(h.call('nationalReloads'), 2);
+  assert.equal(h.call('state.followed.length'), 0);
+  assert.equal(writes, 0);
+});
+
+test('bad and older team snapshots never erase a newer team list', async () => {
+  const now = Date.now();
+  const h = harness([['fs1t|fifa.friendly', JSON.stringify({ fetchedAt: now, teams: [{ id: '560', name: 'China' }] })]]);
+  h.setFetch(() => ({ ok: true, json: async () => ({ leagues: {
+    'fifa.friendly': { fetchedAt: now - 1000, teams: [{ id: '202', name: 'Argentina' }] },
+    'afc.asian.cup': { fetchedAt: now, teams: [{ id: '560' }] },
+    'fifa.worldq.afc': { fetchedAt: now, teams: [] },
+  } }) }));
+  await h.call('seedTeamsFromSnapshot()');
+  assert.equal(h.call('readTeamsCache("fifa.friendly").teams[0].name'), 'China');
+  assert.equal(h.call('readTeamsCache("afc.asian.cup")'), null);
+  assert.equal(h.call('readTeamsCache("fifa.worldq.afc")'), null);
+});
+
+test('national requests ask for full monthly fixtures and team lists', async () => {
+  const h = harness();
+  const events = Array.from({ length: 131 }, (_, id) => ({ id, date: '2026-03-26T12:00:00Z', competitions: [] }));
+  const teams = Array.from({ length: 193 }, (_, id) => [String(id), `Country ${id}`, '']);
+  h.setFetch((url) => {
+    if (String(url).includes('snapshot/')) return { ok: true, json: async () => ({ months: {} }) };
+    assert.equal(new URL(url).searchParams.get('limit'), '1000');
+    return { ok: true, json: async () => String(url).includes('/teams') ? teamsJson(teams) : { events } };
+  });
+  const month = await h.call('fetchMonth("fifa.friendly", "202603")');
+  const roster = await h.call('ensureTeams("fifa.friendly")');
+  assert.equal(month.data.events.length, 131);
+  assert.equal(roster.teams.length, 193);
+});
+
+test('an invalid scoreboard response cannot confirm an empty national matchday', async () => {
+  const old = Date.now() - 24 * 3600e3;
+  const h = harness([monthCache('fifa.friendly', [match('known-national-match', 'fifa.friendly', 26)], old)]);
+  h.setFetch(() => ({ ok: true, json: async () => ({ error: 'unavailable competition' }) }));
+  const r = await h.call('ensureMonth("fifa.friendly", "202609", { force: true })');
+  assert.equal(r.data.events[0].id, 'known-national-match');
+  assert.equal(r.data.fetchedAt, old);
+  assert.equal(r.stale, true);
+});
+
 function harness(entries = [], withApp = false) {
   const values = new Map(entries);
   const storage = {
@@ -258,11 +411,11 @@ test('an unavailable day renders retry instead of an empty-fixture claim', () =>
   }; state.loading = false; renderList()`);
   assert.match(h.elements['#list'].innerHTML, /赛程待确认/);
   assert.match(h.elements['#list'].innerHTML, /id="retry"/);
-  assert.doesNotMatch(h.elements['#list'].innerHTML, /当天暂无所选联赛或关注球队的比赛/);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /当天暂无所选赛事或关注球队的比赛/);
   assert.notEqual(h.elements['#heroCount'].textContent, '暂无比赛');
 
   h.call('state.data.failed = []; state.data.stale = false; state.data.fetchedAt = Date.now(); renderList()');
-  assert.match(h.elements['#list'].innerHTML, /当天暂无所选联赛或关注球队的比赛/);
+  assert.match(h.elements['#list'].innerHTML, /当天暂无所选赛事或关注球队的比赛/);
   assert.equal(h.elements['#heroCount'].textContent, '暂无比赛');
 });
 
@@ -608,7 +761,7 @@ test('date strip dots distinguish confirmed-empty from uncached days', () => {
   assert.equal((html.match(/day-dot off/g) || []).length, 7);
   assert.equal((html.match(/day-dot unk/g) || []).length, 0);
   assert.ok(!html.includes('赛程未知'));
-  assert.match(html, /aria-label="2026-10-05 [^"]*无所选联赛比赛"/);
+  assert.match(html, /aria-label="2026-10-05 [^"]*无所选赛事比赛"/);
 
   /* 另一个启用联赛没有缓存 → 覆盖不足 → 同一天变“未知” */
   h.call("state.enabled.add('esp.1'); renderDays()");
@@ -636,7 +789,7 @@ test('date strip dots distinguish confirmed-empty from uncached days', () => {
   assert.equal((html.match(/day-dot off/g) || []).length, 5);
   assert.match(html, /aria-label="2026-10-07 [^"]*有关注球队比赛"/);
   assert.match(html, /aria-label="2026-10-06 [^"]*有其他比赛"/);
-  assert.match(html, /aria-label="2026-10-05 [^"]*无所选联赛比赛"/);
+  assert.match(html, /aria-label="2026-10-05 [^"]*无所选赛事比赛"/);
 
   /* 无缓存月份 → 未知，aria-label 明示“赛程未知” */
   h.call("state.windowStart = '2026-07-05'; state.dayKey = '2026-07-07'; renderDays()");

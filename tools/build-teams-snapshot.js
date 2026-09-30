@@ -10,7 +10,7 @@ const out = path.join(root, 'snapshot', 'teams.json');
 const { LEAGUES } = require(path.join(root, 'config.js'));
 const ctx = vm.createContext({ window: {}, Intl, AbortController, setTimeout, clearTimeout, fetch, console });
 vm.runInContext(fs.readFileSync(path.join(root, 'data.js'), 'utf8'), ctx);
-const { ESPN_BASE, normalizeTeamEntry, mapLimit } = vm.runInContext('({ ESPN_BASE, normalizeTeamEntry, mapLimit })', ctx);
+const { ESPN_BASE, normalizeTeams, mapLimit } = vm.runInContext('({ ESPN_BASE, normalizeTeams, mapLimit })', ctx);
 
 async function main() {
   let prev = {};
@@ -22,8 +22,7 @@ async function main() {
         const res = await fetch(`${ESPN_BASE}/${id}/teams?limit=1000`, { signal: AbortSignal.timeout(20000) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
-        const teams = (json.sports?.[0]?.leagues?.[0]?.teams || [])
-          .map((x) => normalizeTeamEntry(x?.team)).filter(Boolean);
+        const teams = normalizeTeams(json);
         if (!teams.length) throw new Error('empty team list');
         ok++;
         return [id, { fetchedAt: Date.now(), teams }];

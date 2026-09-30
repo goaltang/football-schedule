@@ -63,7 +63,8 @@ function monthsForDay(dayKey) {
 /* ---------- 缓存 ---------- */
 
 const CACHE_PREFIX = 'fs1|';
-const CACHE_MAX_ENTRIES = 80;
+// 25 项赛事 × 4 个月的快照，并留出少量翻月余量。
+const CACHE_MAX_ENTRIES = 128;
 
 const memStore = new Map();
 const storage = (() => {
@@ -213,6 +214,16 @@ function normalizeLeagueMeta(json, leagueId) {
   return { id: leagueId, logo: (pick && pick.href) || '' };
 }
 
+function normalizeMonthData(json, leagueId, fetchedAt = Date.now()) {
+  /* 错误响应/字段变化不能当成“这个月没有比赛”。 */
+  if (!json || !Array.isArray(json.events)) throw new Error('Invalid scoreboard response');
+  return {
+    fetchedAt,
+    league: normalizeLeagueMeta(json, leagueId),
+    events: json.events.map((ev) => normalizeEvent(ev, leagueId)),
+  };
+}
+
 const inflight = new Map();
 
 /* 网络熔断：短时间连败后进入冷却期，抓取快速失败回落缓存，避免弱网下长时间空转 */
@@ -238,14 +249,10 @@ function networkCoolingDown() {
 function fetchMonth(leagueId, ym) {
   const key = cacheKey(leagueId, ym);
   if (inflight.has(key)) return inflight.get(key);
-  const p = fetchJson(`${ESPN_BASE}/${leagueId}/scoreboard?dates=${ym}`)
+  const p = fetchJson(`${ESPN_BASE}/${leagueId}/scoreboard?dates=${ym}&limit=1000`)
     .then((json) => {
+      const data = normalizeMonthData(json, leagueId);
       noteNetResult(true);
-      const data = {
-        fetchedAt: Date.now(),
-        league: normalizeLeagueMeta(json, leagueId),
-        events: (json.events || []).map((ev) => normalizeEvent(ev, leagueId)),
-      };
       writeCache(leagueId, ym, data);
       return { data, fromCache: false };
     })
@@ -387,6 +394,11 @@ function normalizeTeamEntry(t) {
   };
 }
 
+function normalizeTeams(json) {
+  const lg = json.sports && json.sports[0] && json.sports[0].leagues && json.sports[0].leagues[0];
+  return ((lg && lg.teams) || []).map((x) => normalizeTeamEntry(x && x.team)).filter(Boolean);
+}
+
 function readTeamsCache(leagueId) {
   if (teamsMemo.has(leagueId)) return teamsMemo.get(leagueId);
   let val = null;
@@ -416,8 +428,7 @@ function fetchTeams(leagueId) {
   const p = fetchJson(`${ESPN_BASE}/${leagueId}/teams?limit=1000`)
     .then((json) => {
       noteNetResult(true);
-      const lg = json.sports && json.sports[0] && json.sports[0].leagues && json.sports[0].leagues[0];
-      const teams = ((lg && lg.teams) || []).map((x) => normalizeTeamEntry(x && x.team)).filter(Boolean);
+      const teams = normalizeTeams(json);
       const data = { fetchedAt: Date.now(), teams };
       /* 空名单不覆盖旧缓存（接口偶发返回空壳） */
       if (teams.length) writeTeamsCache(leagueId, data);
@@ -443,7 +454,7 @@ async function ensureTeams(leagueId, opts = {}) {
   if (fresh && !opts.force) return { teams: cached.teams, stale: false, failed: false };
   const fallback = () => {
     const latest = readTeamsCache(leagueId);
-    return { teams: latest ? latest.teams : [], stale: !!latest, failed: !latest };
+    return { teams: latest ? latest.teams : [], stale: !!latest && Date.now() - latest.fetchedAt >= TEAMS_TTL_MS, failed: !latest };
   };
   if (networkCoolingDown() && !opts.force) return fallback();
   try {
