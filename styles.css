@@ -490,6 +490,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 .btn.near { padding: 8px 14px; }
 .more { text-align: center; padding: 12px 0 2px; }
+.preview-date { color: var(--muted); font-size: 13px; margin: 10px 0; }
+.preview-note { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
 
 .warn {
   border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); background: color-mix(in srgb, var(--live) 7%, transparent);

@@ -3,15 +3,15 @@
  */
 'use strict';
 
-const CACHE = 'football-schedule-shell-v13';
+const CACHE = 'football-schedule-shell-v14';
 const SHELL = [
   './',
   './index.html',
   './styles.css',
-  './config.js?v=20260930-teams',
-  './team-names.js?v=20260930-teams',
-  './data.js?v=20260930-teams',
-  './app.js?v=20260930-teams',
+  './config.js?v=20260930-copy',
+  './team-names.js?v=20260930-copy',
+  './data.js?v=20260930-copy',
+  './app.js?v=20260930-copy',
   './manifest.webmanifest',
 ];
 

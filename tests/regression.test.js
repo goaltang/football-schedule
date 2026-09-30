@@ -256,14 +256,14 @@ test('an unavailable day renders retry instead of an empty-fixture claim', () =>
     matches: [], failed: ['eng.1'], fetchedAt: null, fromCache: false,
     stale: true, leagueMeta: new Map(),
   }; state.loading = false; renderList()`);
-  assert.match(h.elements['#list'].innerHTML, /当前赛程数据不可用或不完整/);
+  assert.match(h.elements['#list'].innerHTML, /赛程待确认/);
   assert.match(h.elements['#list'].innerHTML, /id="retry"/);
-  assert.doesNotMatch(h.elements['#list'].innerHTML, /没有所选联赛的比赛/);
-  assert.notEqual(h.elements['#heroCount'].textContent, '无赛程');
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /当天暂无所选联赛或关注球队的比赛/);
+  assert.notEqual(h.elements['#heroCount'].textContent, '暂无比赛');
 
   h.call('state.data.failed = []; state.data.stale = false; state.data.fetchedAt = Date.now(); renderList()');
-  assert.match(h.elements['#list'].innerHTML, /没有所选联赛的比赛/);
-  assert.equal(h.elements['#heroCount'].textContent, '无赛程');
+  assert.match(h.elements['#list'].innerHTML, /当天暂无所选联赛或关注球队的比赛/);
+  assert.equal(h.elements['#heroCount'].textContent, '暂无比赛');
 });
 
 test('legacy followed name resolves by team, survives ID drift, and reads never write', () => {
@@ -322,7 +322,7 @@ test('legacy id-only follow survives upgrade with an honest placeholder', () => 
   const h = harness([['fs1.followed', '["id:7777"]'], ['fs1.enabled', '["eng.1"]']], true);
   h.call('render()');
   assert.equal(h.elements['#followCount'].textContent, '1');
-  assert.match(h.elements['#followTeams'].innerHTML, /ID 7777 · 名称未知/);
+  assert.match(h.elements['#followTeams'].innerHTML, /球队名称待补全/);
   /* 未观察过名称的档案只能按 ID 命中 */
   assert.equal(h.call('isFollowed({ teamId: "7777" })'), true);
   assert.equal(h.call('isFollowed({ name: "未知球队", teamId: "7777" })'), true);
@@ -333,7 +333,7 @@ test('legacy id-only follow survives upgrade with an honest placeholder', () => 
   assert.equal(h.elements['#followCount'].textContent, '2');
   const h2 = harness(h.entries(), true);
   assert.equal(h2.elements['#followCount'].textContent, '2');
-  assert.match(h2.elements['#followTeams'].innerHTML, /ID 7777 · 名称未知/);
+  assert.match(h2.elements['#followTeams'].innerHTML, /球队名称待补全/);
   assert.ok(h2.elements['#followTeams'].innerHTML.includes('曼城'));
   assert.equal(h2.call('isFollowed({ teamId: "7777" })'), true);
   assert.equal(h2.call("isFollowed({ name: 'Manchester City', teamId: '42' })"), true);
@@ -415,8 +415,8 @@ test('follow manager shows each profile next cached fixture only while open', ()
   const html = h.elements['#followTeams'].innerHTML;
   const [mm, dd] = [Number(day.slice(5, 7)), Number(day.slice(8, 10))];
   /* 展示的是未来的那一场（过去的被排除），本地时间与联赛/对阵一并给出 */
-  assert.ok(html.includes(`已缓存下一场赛程：${mm}/${dd} 12:00 · 英超 · Home vs Away`));
-  assert.match(html, /暂无已缓存赛程/); // Roma：诚实说明没有已缓存赛程，不承诺真实最近
+  assert.ok(html.includes(`赛程预览：${mm}/${dd} 12:00 · 英超 · Home vs Away`));
+  assert.match(html, /暂未查到赛程/); // Roma：诚实说明没有已缓存赛程，不承诺真实最近
   /* 收起面板 → 不再展示 */
   h.call('toggleFollowPanel()');
   h.call('render()');
@@ -429,7 +429,7 @@ test('follow manager shows each profile next cached fixture only while open', ()
   h.call('toggleFollowPanel()');
   h.call('render()');
   const [m2, d2] = [Number(day2.slice(5, 7)), Number(day2.slice(8, 10))];
-  assert.ok(h.elements['#followTeams'].innerHTML.includes(`已缓存下一场赛程：${m2}/${d2} 12:00 · 英超 · Home vs Away`));
+  assert.ok(h.elements['#followTeams'].innerHTML.includes(`赛程预览：${m2}/${d2} 12:00 · 英超 · Home vs Away`));
   assert.equal(h.attempts(), fetches); // 全程零网络
   h.call('toggleFollowPanel()');
   h.call('render()');
@@ -457,7 +457,7 @@ test('panel next-fixture hint advances across kickoffs without network', () => {
   const [m1, d1] = [Number(day1.slice(5, 7)), Number(day1.slice(8, 10))];
   const [m2, d2] = [Number(day2.slice(5, 7)), Number(day2.slice(8, 10))];
   let html = h.elements['#followTeams'].innerHTML;
-  assert.ok(html.includes(`已缓存下一场赛程：${m1}/${d1} 12:00 · 英超 · Home vs Away`)); // 最早的一场
+  assert.ok(html.includes(`赛程预览：${m1}/${d1} 12:00 · 英超 · Home vs Away`)); // 最早的一场
   assert.ok(!html.includes(`${m2}/${d2} 12:00`));
 
   const fetches = h.attempts();
@@ -466,14 +466,14 @@ test('panel next-fixture hint advances across kickoffs without network', () => {
   h.call('minuteTick()');
   html = h.elements['#followTeams'].innerHTML;
   assert.ok(!html.includes(`${m1}/${d1} 12:00`));
-  assert.ok(html.includes(`已缓存下一场赛程：${m2}/${d2} 12:00 · 英超 · Home vs Away`));
+  assert.ok(html.includes(`赛程预览：${m2}/${d2} 12:00 · 英超 · Home vs Away`));
 
   /* 跨过第二场 → 诚实说暂无 */
   h.advance(k2.getTime() - Date.now() + 60000);
   h.call('minuteTick()');
   html = h.elements['#followTeams'].innerHTML;
-  assert.match(html, /暂无已缓存赛程/);
-  assert.ok(!html.includes('已缓存下一场赛程：'));
+  assert.match(html, /暂未查到赛程/);
+  assert.ok(!html.includes('赛程预览：'));
   assert.equal(h.attempts(), fetches); // 全程零网络
 
   /* 面板收起时：tick 不动行、不重算 */
@@ -558,7 +558,7 @@ test('empty-day followed preview searches disabled leagues of followed teams', a
   assert.equal(pv.kind, 'followed');
   assert.equal(pv.matches.length, 1);
   assert.equal(pv.matches[0].league, 'esp.1');
-  assert.ok(h.elements['#list'].innerHTML.includes('你关注的球队'));
+  assert.ok(h.elements['#list'].innerHTML.includes('关注球队赛程预览'));
 });
 
 test('empty-day generic nearby ignores disabled-league non-followed matches', async () => {
@@ -742,12 +742,72 @@ test('week view groups by day, skips empty days, marks followed', async () => {
 
 test('week view keeps incomplete days distinct from a confirmed empty week', () => {
   const h = harness([], true);
-  h.call(`state.view = 'week'; state.windowStart = '2026-09-21';
+  h.call(`state.loading = false; state.view = 'week'; state.windowStart = '2026-09-21';
     state.weekDays = [{ dayKey: '2026-09-22', matches: [], pending: true }]; render()`);
-  const html = h.elements['#list'].innerHTML;
-  assert.match(html, /数据不完整，无法确认是否有比赛/);
-  assert.match(html, /重试/);
-  assert.doesNotMatch(html, /这一周没有赛程/);
+  let html = h.elements['#list'].innerHTML;
+  assert.match(html, /加载中…/);
+  assert.doesNotMatch(html, /id="retry"|本周暂无比赛|未能加载/);
+
+  h.call('state.weekDays[0].pending = false; state.weekDays[0].failed = ["eng.1"]; render()');
+  html = h.elements['#list'].innerHTML;
+  assert.match(html, /赛程待确认/);
+  assert.match(html, /id="retry"/);
+  assert.doesNotMatch(html, /本周暂无比赛/);
+  assert.equal(h.elements['#heroCount'].textContent, '赛程待确认');
+
+  h.call('state.weekDays[0].failed = []; render()');
+  assert.match(h.elements['#list'].innerHTML, /本周暂无比赛/);
+  assert.equal(h.elements['#heroCount'].textContent, '本周暂无比赛');
+});
+
+test('background updates keep matches visible without warning of a loading failure', () => {
+  const h = harness([], true);
+  h.context.fixture = match('visible', 'eng.1', 22);
+  h.call(`state.loading = false; state.data = {
+    matches: [fixture], failed: [], fetchedAt: Date.now(), fromCache: true,
+    stale: true, pending: true, leagueMeta: new Map(),
+  }; renderList()`);
+  assert.match(h.elements['#list'].innerHTML, /class="match /);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /class="warn"|缓存|未能加载/);
+  assert.match(h.elements['#heroCount'].textContent, /更新中…/);
+  assert.match(h.elements['#updated'].textContent, /更新于 .*更新中…/);
+
+  h.call('state.data.pending = false; renderList()');
+  assert.match(h.elements['#list'].innerHTML, /比赛时间和比分可能有变动/);
+  assert.match(h.elements['#heroCount'].textContent, /赛程可能有变动/);
+
+  h.call('state.data.failed = ["esp.1"]; renderList()');
+  assert.match(h.elements['#list'].innerHTML, /西甲赛程未能加载/);
+  assert.match(h.elements['#heroCount'].textContent, /部分赛程未能加载/);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /无法确认当天是否有比赛|esp\.1/);
+});
+
+test('a partially unavailable week with known matches does not deny those matches', () => {
+  const h = harness([], true);
+  h.context.fixture = match('visible', 'eng.1', 22);
+  h.call(`state.loading = false; state.view = 'week'; state.windowStart = '2026-09-21';
+    state.weekDays = [
+      { dayKey: '2026-09-22', matches: [fixture], failed: [], fetchedAt: Date.now() },
+      { dayKey: '2026-09-23', matches: [], failed: ['esp.1'] },
+    ]; render()`);
+  assert.match(h.elements['#list'].innerHTML, /部分日期的赛程未能加载/);
+  assert.match(h.elements['#list'].innerHTML, /id="retry"/);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /无法确认本周是否有比赛|本周暂无比赛/);
+  assert.match(h.elements['#heroCount'].textContent, /1 场.*部分赛程未能加载/);
+
+  h.call(`state.weekDays = null; state.loading = true; render()`);
+  assert.equal(h.elements['#updated'].textContent, '更新中…');
+  assert.match(h.elements['#list'].innerHTML, /role="status"/);
+  assert.equal(h.elements['#refresh'].getAttribute('aria-busy'), 'true');
+});
+
+test('load errors show an actionable message without exposing the raw exception', () => {
+  const h = harness([], true);
+  h.call(`state.loading = false; state.data = null; state.error = 'HTTP 503 internal-test'; renderList()`);
+  assert.match(h.elements['#list'].innerHTML, /暂时无法加载赛程/);
+  assert.match(h.elements['#list'].innerHTML, /id="retry"/);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /HTTP|internal-test/);
+  assert.equal(h.elements['#refresh'].getAttribute('aria-busy'), 'false');
 });
 
 test('week view applies a background update received before the initial week completes', async () => {
@@ -903,7 +963,7 @@ test('team search stays honest when the list cannot load', async () => {
   h.elements['#followSearch'].value = 'arsenal';
   h.elements['#followSearch'].dispatch('input', { target: h.elements['#followSearch'] });
   await h.call('catalogPromise');
-  assert.match(h.elements['#followResults'].innerHTML, /球队名单暂时无法加载/);
+  assert.match(h.elements['#followResults'].innerHTML, /暂时无法搜索球队/);
   assert.doesNotMatch(h.elements['#followResults'].innerHTML, /没有找到/);
   assert.equal(h.call('catalogPromise'), null); // 全部失败后清掉，再次聚焦可重试
 });
