@@ -342,6 +342,40 @@ const TEAMS_PREFIX = 'fs1t|';
 const TEAMS_TTL_MS = 7 * 24 * 3600e3;
 
 const teamsMemo = new Map();
+let teamsSnapshotPromise = null;
+
+/* 名单由本站提供，避免移动网络无法直连 ESPN 时搜索完全不可用。 */
+function seedTeamsFromSnapshot() {
+  if (teamsSnapshotPromise) return teamsSnapshotPromise;
+  if (typeof location !== 'undefined' && location.protocol === 'file:') return Promise.resolve(false);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SNAPSHOT_TIMEOUT_MS);
+  teamsSnapshotPromise = fetch('snapshot/teams.json', { signal: ctrl.signal, cache: 'no-store' })
+    .then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    })
+    .then((snap) => {
+      let valid = false;
+      for (const [id, raw] of Object.entries((snap && snap.leagues) || {})) {
+        if (!raw || !Number.isFinite(raw.fetchedAt) || raw.fetchedAt <= 0
+          || !Array.isArray(raw.teams) || !raw.teams.length
+          || !raw.teams.every((t) => t && typeof t.id === 'string' && t.id
+            && typeof t.name === 'string' && t.name)) continue;
+        valid = true;
+        const local = readTeamsCache(id);
+        if (!local || raw.fetchedAt > local.fetchedAt) writeTeamsCache(id, raw);
+      }
+      return valid;
+    })
+    .catch(() => false)
+    .then((valid) => {
+      if (!valid) teamsSnapshotPromise = null;
+      return valid;
+    })
+    .finally(() => clearTimeout(timer));
+  return teamsSnapshotPromise;
+}
 
 function normalizeTeamEntry(t) {
   if (!t || t.id == null || !t.displayName) return null;
@@ -379,7 +413,7 @@ function writeTeamsCache(leagueId, data) {
 function fetchTeams(leagueId) {
   const key = `teams|${leagueId}`;
   if (inflight.has(key)) return inflight.get(key);
-  const p = fetchJson(`${ESPN_BASE}/${leagueId}/teams`)
+  const p = fetchJson(`${ESPN_BASE}/${leagueId}/teams?limit=1000`)
     .then((json) => {
       noteNetResult(true);
       const lg = json.sports && json.sports[0] && json.sports[0].leagues && json.sports[0].leagues[0];
@@ -400,10 +434,17 @@ function fetchTeams(leagueId) {
 
 /* 取某联赛球队名单 → { teams, stale, failed }；缓存新鲜直接用，冷却期不发网络 */
 async function ensureTeams(leagueId, opts = {}) {
-  const cached = readTeamsCache(leagueId);
+  let cached = readTeamsCache(leagueId);
+  if ((!cached || Date.now() - cached.fetchedAt >= TEAMS_TTL_MS) && !opts.force) {
+    await seedTeamsFromSnapshot();
+    cached = readTeamsCache(leagueId);
+  }
   const fresh = !!cached && Date.now() - cached.fetchedAt < TEAMS_TTL_MS;
   if (fresh && !opts.force) return { teams: cached.teams, stale: false, failed: false };
-  const fallback = () => ({ teams: cached ? cached.teams : [], stale: !!cached, failed: !cached });
+  const fallback = () => {
+    const latest = readTeamsCache(leagueId);
+    return { teams: latest ? latest.teams : [], stale: !!latest, failed: !latest };
+  };
   if (networkCoolingDown() && !opts.force) return fallback();
   try {
     const data = await fetchTeams(leagueId);

@@ -3,15 +3,15 @@
  */
 'use strict';
 
-const CACHE = 'football-schedule-shell-v12';
+const CACHE = 'football-schedule-shell-v13';
 const SHELL = [
   './',
   './index.html',
   './styles.css',
-  './config.js?v=20260930-mobile',
-  './team-names.js?v=20260930-mobile',
-  './data.js?v=20260930-mobile',
-  './app.js?v=20260930-mobile',
+  './config.js?v=20260930-teams',
+  './team-names.js?v=20260930-teams',
+  './data.js?v=20260930-teams',
+  './app.js?v=20260930-teams',
   './manifest.webmanifest',
 ];
 
@@ -34,7 +34,7 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const sameOrigin = new URL(req.url).origin === self.location.origin;
 
-  if (sameOrigin && new URL(req.url).pathname.endsWith('/snapshot/schedule.json')) {
+  if (sameOrigin && /\/snapshot\/(?:schedule|teams)\.json$/.test(new URL(req.url).pathname)) {
     /* 赛程快照：网络优先（要的就是新数据），离线才回落上次的副本；不进 SHELL，避免装载时白拉 600KB */
     e.respondWith(
       fetch(req)

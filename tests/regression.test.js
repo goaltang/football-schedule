@@ -1074,3 +1074,46 @@ test('week view keeps completed results instead of early snapshot progress', asy
   await h.call('reloadWeek()');
   assert.equal(h.call('state.weekDays.every(day => !day.stale && !day.pending)'), true);
 });
+
+test('team search works from the same-origin snapshot without contacting ESPN', async () => {
+  const h = harness([], true);
+  h.context.location.protocol = 'https:';
+  const leagues = Object.fromEntries(h.call('LEAGUES.map((lg) => lg.id)').map((id) => [id, {
+    fetchedAt: Date.now(),
+    teams: [{ id: '360', name: 'Manchester United', short: 'Man United', logo: '' }],
+  }]));
+  let requests = 0;
+  h.setFetch(async (url) => {
+    assert.equal(String(url), 'snapshot/teams.json');
+    requests++;
+    return { ok: true, json: async () => ({ leagues }) };
+  });
+  h.call("onSearchInput({ target: { value: '曼联' } })");
+  await h.call('catalogPromise');
+  assert.equal(requests, 1); // 并发联赛共用一次快照请求
+  assert.match(h.elements['#followResults'].innerHTML, /Manchester United/);
+  assert.doesNotMatch(h.elements['#followResults'].innerHTML, /无法加载/);
+  h.call("onSearchClick({ target: { closest: () => ({ dataset: { searchId: '360' } }) } })");
+  assert.equal(h.call('state.followed[0].name'), 'Manchester United');
+  assert.equal(h.call('state.followed[0].leagues.length'), Object.keys(leagues).length);
+});
+
+test('team snapshot preserves newer cache, ignores invalid data, and retries failure', async () => {
+  const h = harness();
+  const newer = { fetchedAt: Date.now(), teams: [{ id: '359', name: 'Arsenal', short: '', logo: '' }] };
+  h.call(`writeTeamsCache('eng.1', ${JSON.stringify(newer)})`);
+  let calls = 0;
+  h.setFetch(async () => {
+    calls++;
+    if (calls === 1) throw new Error('offline');
+    return { ok: true, json: async () => ({ leagues: {
+      'eng.1': { fetchedAt: newer.fetchedAt - 1000, teams: [{ id: '360', name: 'Manchester United' }] },
+      'esp.1': { fetchedAt: Date.now(), teams: [{ name: 'missing ID' }] },
+    } }) };
+  });
+  assert.equal(await h.call('seedTeamsFromSnapshot()'), false);
+  assert.equal(await h.call('seedTeamsFromSnapshot()'), true);
+  assert.equal(calls, 2);
+  assert.equal(h.call("readTeamsCache('eng.1').teams[0].name"), 'Arsenal');
+  assert.equal(h.call("readTeamsCache('esp.1')"), null);
+});
