@@ -6,6 +6,7 @@
  * 按月拉还有个好处：整月比赛日一次全知，空日期的“最近的比赛”、日期条打点都不用逐天探测。
  */
 'use strict';
+import { DEFAULT_ENABLED } from './config.js';
 
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
 const ET_ZONE = 'America/New_York';
@@ -654,3 +655,5 @@ async function findNearbyMatchdays(dayKey, opts = {}) {
   }
   return result;
 }
+
+export { dayKeyOf, parseDayKey, addDays, etBucketOf, bucketsForDay, monthsForDay, cacheKey, readCache, writeCache, pruneCache, monthDistance, monthTtlMs, fetchOnce, fetchJson, normalizeEvent, normalizeLeagueMeta, normalizeMonthData, noteNetResult, networkCoolingDown, fetchMonth, seedFromSnapshot, ensureMonth, seedTeamsFromSnapshot, normalizeTeamEntry, normalizeTeams, readTeamsCache, writeTeamsCache, fetchTeams, ensureTeams, mapLimit, mergeByLocalDay, collectView, loadDay, cachedDayMatches, findNearbyMatchdays, ESPN_BASE, ET_ZONE, FETCH_TIMEOUT_MS, STATUS_BY_NAME, CACHE_PREFIX, CACHE_MAX_ENTRIES, SNAPSHOT_URL, SNAPSHOT_TIMEOUT_MS, TEAMS_PREFIX, TEAMS_TTL_MS, storage, cacheMemo, teamsMemo };

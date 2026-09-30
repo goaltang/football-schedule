@@ -3,17 +3,9 @@
  */
 'use strict';
 
-const CACHE = 'football-schedule-shell-v15';
-const SHELL = [
-  './',
-  './index.html',
-  './styles.css',
-  './config.js?v=20260930-national',
-  './team-names.js?v=20260930-national',
-  './data.js?v=20260930-national',
-  './app.js?v=20260930-national',
-  './manifest.webmanifest',
-];
+const CACHE = 'football-schedule-shell-v16-react';
+// Vite replaces this list with the complete hashed build assets.
+const SHELL = ['./', './index.html', './manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

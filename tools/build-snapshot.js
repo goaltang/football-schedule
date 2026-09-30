@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath } from 'node:url';
 /* 生成赛程快照：snapshot/schedule.json
  *
  * 新设备首次打开时本地没有缓存，若浏览器直连 ESPN 慢或不通就会一直“加载中”。
@@ -12,11 +13,10 @@
  */
 'use strict';
 
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+import fs from 'node:fs';
+import path from 'node:path';
 
-const root = path.join(__dirname, '..');
+const root = fileURLToPath(new URL('../', import.meta.url));
 const OUT = path.join(root, 'snapshot', 'schedule.json');
 // 小于 3 小时调度间隔：即使赛事内容不变，也发布本轮核对后的时间戳。
 // 否则同内容快照被跳过两轮，前端 6 小时有效期会先耗尽。
@@ -25,13 +25,10 @@ const CONCURRENCY = 4;
 const ATTEMPTS = 3;
 const TIMEOUT_MS = 20000;
 
-const { LEAGUES } = require(path.join(root, 'config.js'));
+import { LEAGUES } from '../config.js';
 
 /* 复用数据层的归一化，保证与浏览器缓存格式一致 */
-const ctx = vm.createContext({ window: {}, Intl, AbortController, setTimeout, clearTimeout, fetch, console });
-vm.runInContext(fs.readFileSync(path.join(root, 'data.js'), 'utf8'), ctx, { filename: 'data.js' });
-const { ESPN_BASE, normalizeMonthData, etBucketOf } =
-  vm.runInContext('({ ESPN_BASE, normalizeMonthData, etBucketOf })', ctx);
+import { ESPN_BASE, normalizeMonthData, etBucketOf } from '../data.js';
 
 /* 与 data.js 的月份口径一致：按美东日期取“上月、本月、后两个月” */
 function monthsWindow() {
