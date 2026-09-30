@@ -128,7 +128,7 @@ PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生
 
 ## 部署与迁移
 
-合并迁移 PR 后，在仓库 **Settings → Pages → Source** 将发布源设为 **GitHub Actions**。`deploy.yml` 安装依赖、运行回归测试、构建 `dist/` 并发布。
+合并迁移 PR 前，在仓库 **Settings → Pages → Source** 将发布源设为 **GitHub Actions**。若已先合并，切换来源后手动运行 `deploy` 工作流即可发布。`deploy.yml` 安装依赖、运行回归测试、构建 `dist/` 并发布。
 
 赛程快照继续每三小时更新。快照工作流提交数据后显式构建并发布，确保机器人提交不会漏掉部署。
 
