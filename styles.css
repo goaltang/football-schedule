@@ -209,12 +209,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   display: flex; align-items: center; gap: 10px; min-width: 0;
 }
 
-.filter-summary { display: flex; align-items: baseline; gap: 10px; }
-.filter-label { font-size: 14px; font-weight: 600; }
-.filter-summary-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-
 .filter-toggle {
-  display: none;
+  display: inline-flex;
   align-items: center; gap: 8px;
   border: 1px solid transparent; background: var(--card); color: var(--accent);
   min-height: 44px; padding: 0 14px; border-radius: 6px; cursor: pointer;
@@ -350,6 +346,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 
 .chips { display: grid; gap: 12px; margin-top: 12px; }
+.filters:not(.is-open) .chips { display: none; }
 .chip-group { min-width: 0; padding: 14px; background: var(--card); border-radius: 12px; }
 .chip-group-head {
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
@@ -607,12 +604,10 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .days::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 5px; }
   .days::-webkit-scrollbar-track { background: var(--ink-2); }
   .filter-toolbar { flex-direction: column; align-items: stretch; gap: 8px; }
-  .filter-summary { display: none; }
-  .filter-toggle { display: inline-flex; width: 100%; text-align: left; }
+  .filter-toggle { width: 100%; text-align: left; }
   .secondary-actions { margin-left: 0; justify-content: flex-end; gap: 6px; }
   .secondary-actions .view-seg { margin-right: auto; }
   .filters { padding-inline: 12px; }
-  .filters:not(.is-open) .chips { display: none; }
   .chip-group { padding: 12px; }
   .chip-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .top { padding-inline: 12px; }

@@ -25,10 +25,6 @@ export function LeagueChips({ state, api }: ViewProps) {
 export function LeagueFilters(props: ViewProps) {
   const { state, api } = props;
   return <div className={`filters${state.filtersOpen ? ' is-open' : ''}`}><div className="filter-toolbar">
-    <div className="filter-summary">
-      <span className="filter-label">赛事筛选</span>
-      <span className="filter-summary-count">已选 {state.enabled.size}/{LEAGUES.length}</span>
-    </div>
     <button type="button" className="filter-toggle" id="filterToggle" aria-controls="chips" aria-expanded={state.filtersOpen} onClick={api.toggleFilters}>赛事筛选 <span className="filter-count" id="filterCount">{state.enabled.size}/{LEAGUES.length}</span><span className="filter-toggle-text" aria-hidden="true">{state.filtersOpen ? '收起' : '展开'}</span></button>
     <div className="secondary-actions"><div className="view-seg" role="group" aria-label="视图">
       <button type="button" className={`seg${state.view === 'day' ? ' on' : ''}`} id="viewDay" aria-label="按日查看" aria-pressed={state.view === 'day'} onClick={() => api.setView('day')}>日</button>
