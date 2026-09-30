@@ -257,6 +257,48 @@ function fetchMonth(leagueId, ym) {
   return p;
 }
 
+/* ---------- 同源快照（冷启动兜底） ----------
+ * snapshot/schedule.json 由 GitHub Actions 定时生成（tools/build-snapshot.js），格式与月缓存一致。
+ * 新设备没有任何缓存、浏览器直连 ESPN 又慢或不通时，先用它出数据；写入缓存后照常按 TTL 判过期并联网更新。
+ * 每个页面会话只取一次；file:// 或取不到都视为“没有快照”，不影响原有流程。 */
+
+const SNAPSHOT_URL = 'snapshot/schedule.json';
+const SNAPSHOT_TIMEOUT_MS = 10000;
+let snapshotPromise = null;
+
+function seedFromSnapshot() {
+  if (snapshotPromise) return snapshotPromise;
+  if (typeof location !== 'undefined' && location.protocol === 'file:') return (snapshotPromise = Promise.resolve(false));
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SNAPSHOT_TIMEOUT_MS);
+  snapshotPromise = fetch(SNAPSHOT_URL, { signal: ctrl.signal })
+    .then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    })
+    .then((snap) => {
+      const months = snap && snap.months;
+      if (!months || typeof months !== 'object') return false;
+      let seeded = false;
+      for (const key of Object.keys(months)) {
+        const [leagueId, ym] = key.split('|');
+        const entry = months[key];
+        if (!leagueId || !/^\d{6}$/.test(ym || '') || !entry || !Array.isArray(entry.events)) continue;
+        const local = readCache(leagueId, ym);
+        if (local && local.fetchedAt >= entry.fetchedAt) continue;
+        /* 批量写入，最后统一淘汰一次（逐条 pruneCache 会反复解析全部缓存） */
+        cacheMemo.set(cacheKey(leagueId, ym), entry);
+        try { storage.setItem(cacheKey(leagueId, ym), JSON.stringify(entry)); } catch (e) { /* 配额满：只留内存副本 */ }
+        seeded = true;
+      }
+      if (seeded) pruneCache();
+      return seeded;
+    })
+    .catch(() => false)
+    .finally(() => clearTimeout(timer));
+  return snapshotPromise;
+}
+
 /* 取某联赛某月的数据：缓存新鲜则直接用，否则抓取（失败回落旧缓存）
  * opts.force：无视缓存新鲜度强制抓取（刷新按钮 / 直播轮询）
  * opts.cacheOnly：只读缓存不发网络（stale-while-revalidate 的第一步）
@@ -392,6 +434,16 @@ async function collectView(dayKey, jobs, policy) {
   let fetchedAt = 0;
   let stale = false;
 
+  const snapshot = () => ({
+    dayKey,
+    matches: [...matches.values()].sort((x, y) => (x.start < y.start ? -1 : x.start > y.start ? 1 : 0)),
+    leagueMeta: new Map(leagueMeta),
+    failed: [...missing],
+    fromCache,
+    fetchedAt: fetchedAt || null,
+    stale,
+  });
+
   await mapLimit(jobs, 6, async ({ leagueId, ym }) => {
     const r = await ensureMonth(leagueId, ym, policy);
     if (r.stale) stale = true;
@@ -402,20 +454,18 @@ async function collectView(dayKey, jobs, policy) {
     if (r.fromCache) fromCache = true;
     fetchedAt = Math.max(fetchedAt, r.data.fetchedAt);
     leagueMeta.set(leagueId, r.data.league);
+    let added = false;
     for (const m of r.data.events) {
-      if (dayKeyOf(new Date(m.start)) === dayKey) matches.set(m.id, m);
+      if (dayKeyOf(new Date(m.start)) === dayKey) {
+        matches.set(m.id, m);
+        added = true;
+      }
     }
+    /* 渐进渲染：某联赛先到且当天有比赛就先交出去，不必等其余联赛 */
+    if (added && policy && policy.onProgress) policy.onProgress(snapshot());
   });
 
-  return {
-    dayKey,
-    matches: [...matches.values()].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0)),
-    leagueMeta,
-    failed: [...missing],
-    fromCache,
-    fetchedAt: fetchedAt || null,
-    stale,
-  };
+  return snapshot();
 }
 
 async function loadDay(dayKey, opts = {}) {
@@ -429,25 +479,39 @@ async function loadDay(dayKey, opts = {}) {
   const needsNetwork = opts.force || instant.stale || !instant.fetchedAt;
   if (!needsNetwork) return instant;
 
-  const refresh = () => collectView(dayKey, jobs, { force: opts.force });
+  const refresh = (onProgress) => collectView(dayKey, jobs, { force: opts.force, onProgress });
   if (instant.fetchedAt && !opts.force) {
     refresh()
       .then((fresh) => { if (opts.onUpdate) opts.onUpdate(fresh); })
       .catch(() => { /* 后台刷新失败：保留缓存视图 */ });
     return { ...instant, failed: [], pending: true };
   }
-  /* 无缓存：限时等待网络，超时先返回“尚无数据”视图，抓取继续在后台完成 */
+
+  /* 无缓存：限时等待。联赛逐个到达、或同源快照就绪时，都立刻用当前缓存出一版“更新中”视图；
+     全部完成则直接返回最新；超时则先返回已有内容，抓取继续在后台完成 */
   const deadline = opts.deadline ?? 25e3;
-  const pending = refresh();
-  const bounded = await Promise.race([
-    pending,
+  let latest = null;
+  let finished = false;
+  const publish = async () => {
+    const v = await collectView(dayKey, jobs, { cacheOnly: true });
+    if (finished || !v.fetchedAt) return null;
+    latest = v;
+    if (opts.onUpdate) opts.onUpdate({ ...v, failed: [], stale: true, pending: true });
+    return v;
+  };
+  const pending = refresh(() => { publish(); }).then((v) => { finished = true; return v; });
+  const never = new Promise(() => {});
+  const snapReady = opts.force ? never : seedFromSnapshot().then((ok) => (ok ? publish() : null));
+  const first = await Promise.race([
+    pending.then((v) => ({ v, done: true })),
+    snapReady.then((v) => (v ? { v, done: false } : never)),
     new Promise((resolve) => setTimeout(() => resolve(null), deadline)),
   ]);
-  if (bounded) return bounded;
+  if (first && first.done) return first.v;
   pending
     .then((fresh) => { if (opts.onUpdate) opts.onUpdate(fresh); })
     .catch(() => { /* 后台刷新失败：保持当前视图 */ });
-  return { ...instant, failed: [], pending: true };
+  return { ...((first && first.v) || latest || instant), failed: [], pending: true };
 }
 
 /* ---------- 对外：只读缓存，不发请求 ---------- */

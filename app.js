@@ -1512,6 +1512,11 @@ function bind() {
       reload({ force: true });
     }
   });
+  /* 网络恢复：当前视图仍不完整（无数据/待确认）时自动重试一次 */
+  window.addEventListener('online', () => {
+    const d = state.data;
+    if (!state.loading && (state.error || !d || !d.fetchedAt || d.pending || d.failed.length)) reload({ force: true });
+  });
   document.addEventListener('keydown', (e) => {
     const t = e.target;
     if (e.altKey || e.ctrlKey || e.metaKey || (t && t.matches && !t.matches('body, [data-day]'))) return;

@@ -1065,3 +1065,58 @@ test('team search stays honest when the list cannot load', async () => {
   assert.doesNotMatch(h.elements['#followResults'].innerHTML, /没有找到/);
   assert.equal(h.call('catalogPromise'), null); // 全部失败后清掉，再次聚焦可重试
 });
+
+test('cold start renders leagues that already arrived when the deadline hits', async () => {
+  const h = harness();
+  const day = '2026-09-26';
+  const ev = { id: 'e1', date: new Date(2026, 8, 26, 12).toISOString(), status: { type: { name: 'STATUS_SCHEDULED', state: 'pre' } },
+    competitions: [{ competitors: [
+      { homeAway: 'home', team: { id: '1', displayName: 'A' } },
+      { homeAway: 'away', team: { id: '2', displayName: 'B' } }] }] };
+  h.setFetch((url) => (String(url).includes('/eng.1/')
+    ? Promise.resolve({ ok: true, json: async () => ({ leagues: [], events: [ev] }) })
+    : new Promise(() => {}))); /* 其余联赛一直无响应 */
+  h.context.updates = [];
+  const r = await h.call(`loadDay('${day}', { leagues: ['eng.1', 'esp.1'], deadline: 50, onUpdate: (v) => updates.push(v) })`);
+  assert.equal(r.pending, true);
+  assert.equal(r.matches.length, 1);
+  assert.equal(r.matches[0].id, 'e1');
+  assert.ok(r.fetchedAt);
+  assert.ok(h.context.updates.length >= 1);
+});
+
+test('cold start with an unreachable ESPN falls back to the same-origin snapshot', async () => {
+  const h = harness();
+  const entry = {
+    fetchedAt: Date.now() - 1000,
+    league: { id: 'eng.1', logo: '' },
+    events: [match('snap1', 'eng.1', 26)],
+  };
+  h.setFetch((url) => (String(url).includes('snapshot/schedule.json')
+    ? Promise.resolve({ ok: true, json: async () => ({ generatedAt: Date.now(), months: { 'eng.1|202609': entry } }) })
+    : new Promise(() => {}))); /* ESPN 一直无响应 */
+  h.context.updates = [];
+  const r = await h.call("loadDay('2026-09-26', { leagues: ['eng.1'], deadline: 20000, onUpdate: (v) => updates.push(v) })");
+  assert.equal(r.matches.length, 1);
+  assert.equal(r.matches[0].id, 'snap1');
+  assert.equal(r.pending, true); /* 仍在联网核对 */
+  assert.ok(r.fetchedAt);
+  assert.ok(h.entries().some(([k]) => k === 'fs1|m|eng.1|202609')); /* 已写入本地缓存，下次直接命中 */
+});
+
+test('a snapshot never overwrites a newer local cache and a bad snapshot is ignored', async () => {
+  const newer = monthCache('eng.1', [match('local', 'eng.1', 26)], Date.now());
+  const h = harness([newer]);
+  h.setFetch(async (url) => {
+    if (String(url).includes('snapshot/schedule.json')) {
+      return { ok: true, json: async () => ({ months: { 'eng.1|202609': { fetchedAt: 1, league: { id: 'eng.1' }, events: [match('old', 'eng.1', 26)] } } }) };
+    }
+    throw new Error('offline');
+  });
+  assert.equal(await h.call('seedFromSnapshot()'), false);
+  assert.equal(JSON.parse(h.storage.getItem('fs1|m|eng.1|202609')).events[0].id, 'local');
+
+  const bad = harness();
+  bad.setFetch(async () => ({ ok: true, json: async () => ({ months: 'nope' }) }));
+  assert.equal(await bad.call('seedFromSnapshot()'), false);
+});

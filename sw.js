@@ -3,7 +3,7 @@
  */
 'use strict';
 
-const CACHE = 'football-schedule-shell-v9';
+const CACHE = 'football-schedule-shell-v11';
 const SHELL = [
   './',
   './index.html',
@@ -33,6 +33,22 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const sameOrigin = new URL(req.url).origin === self.location.origin;
+
+  if (sameOrigin && new URL(req.url).pathname.endsWith('/snapshot/schedule.json')) {
+    /* 赛程快照：网络优先（要的就是新数据），离线才回落上次的副本；不进 SHELL，避免装载时白拉 600KB */
+    e.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req).then((hit) => hit || Response.error()))
+    );
+    return;
+  }
 
   if (sameOrigin) {
     /* 本地资源（页面/脚本/队徽）：缓存优先，后台更新 */
