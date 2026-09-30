@@ -46,8 +46,12 @@ self.addEventListener('fetch', (e) => {
     /* 页面和脚本网络优先，避免手机长期运行旧数据逻辑；队徽等资源缓存优先。 */
     const url = new URL(req.url);
     const code = req.mode === 'navigate' || /\.(?:html|js|css)$/.test(url.pathname);
+    // Vite's hashed build assets are identical for every Origin. Preview can
+    // return Vary: Origin, but installation and module loads use different
+    // headers, so match these immutable files by URL when reopening offline.
+    const builtAsset = /\/assets\/[^/]+\.(?:js|css)$/.test(url.pathname);
     e.respondWith(
-      caches.match(req).then((hit) => {
+      caches.match(req, { ignoreVary: builtAsset }).then((hit) => {
         let timer;
         const net = fetch(req)
           .then((res) => {
