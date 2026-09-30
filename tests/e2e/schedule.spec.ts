@@ -26,7 +26,20 @@ test('filters retain keyboard focus and followed matches from a disabled competi
   await fixtures(page);
   await page.goto('./');
   await page.getByRole('button', { name: '关注曼联', exact: true }).click();
-  if (testInfo.project.name === 'mobile') await page.getByRole('button', { name: /赛事筛选/ }).click();
+  const toggle = page.getByRole('button', { name: /赛事筛选/ });
+  await expect(toggle).toBeVisible();
+  const initiallyOpen = testInfo.project.name !== 'mobile';
+  await expect(toggle).toHaveAttribute('aria-expanded', String(initiallyOpen));
+  if (initiallyOpen) {
+    await expect(page.locator('#chips')).toBeVisible();
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  }
+  await expect(page.locator('#chips')).toBeHidden();
+  await toggle.focus();
+  await toggle.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('#chips')).toBeVisible();
   const league = page.getByRole('button', { name: '英超', exact: true });
   await league.focus();
   await league.press('Space');
@@ -34,6 +47,10 @@ test('filters retain keyboard focus and followed matches from a disabled competi
   await expect(league).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByRole('heading', { name: '★ 我的关注' })).toBeVisible();
   await expect(page.locator('#list .match')).toHaveCount(1);
+  await toggle.click();
+  await expect(page.locator('#chips')).toBeHidden();
+  await toggle.click();
+  await expect(league).toHaveAttribute('aria-pressed', 'false');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 test('team search, follow removal focus and preferences survive reload', async ({ page }) => {

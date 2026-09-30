@@ -41,7 +41,7 @@ const state = {
   loading: false,
   error: null,
   followOpen: false,
-  filtersOpen: false,
+  filtersOpen: Boolean(window.matchMedia?.('(min-width: 641px)').matches),
 };
 
 let liveTimer = null;
