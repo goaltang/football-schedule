@@ -4,7 +4,7 @@
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 const STATUS_LABEL = {
   SCHEDULED: '未开赛',
-  LIVE: '直播',
+  LIVE: '进行中',
   FT: '完场',
   POSTPONED: '延期',
   CANCELLED: '取消',
@@ -17,6 +17,44 @@ const LS_ENABLED = 'fs1.enabled';
 const LS_DAY = 'fs1.day';
 const LS_FOLLOWED = 'fs1.followed';
 const LS_VIEW = 'fs1.view';
+
+/* 页面文案与显示时机见 docs/ui-copy.md。日/周视图共用同一套状态词。 */
+const UI_TEXT = {
+  loading: '加载中…',
+  updating: '更新中…',
+  unavailable: '暂时无法加载赛程',
+  incomplete: '部分赛程未能加载',
+  stale: '赛程可能有变动',
+  unconfirmed: '赛程待确认',
+  emptyDay: '暂无比赛',
+  emptyWeek: '本周暂无比赛',
+  retry: '重新加载',
+};
+
+function scheduleStatus(data, error = false, loading = false) {
+  if (loading || (data && data.pending)) return 'updating';
+  if (error || (data && (data.error || (data.failed && data.failed.length)))) return 'incomplete';
+  if (data && data.stale) return 'stale';
+  return 'ready';
+}
+
+function renderUpdateMeta(data, pending) {
+  $('#refresh').classList.toggle('busy', state.loading);
+  $('#refresh').setAttribute('aria-busy', String(state.loading));
+  $('#updated').textContent = [
+    data && data.fetchedAt ? `更新于 ${fmtClock(data.fetchedAt)}` : '',
+    state.loading || pending ? UI_TEXT.updating : '',
+  ].filter(Boolean).join(' · ');
+}
+
+function scheduleNotice(data) {
+  const status = scheduleStatus(data, state.error, state.loading);
+  if (status === 'updating' || status === 'ready') return '';
+  if (state.error) return '暂时无法更新赛程，比赛时间和比分可能有变动。';
+  if (status === 'stale') return '比赛时间和比分可能有变动，可刷新查看最新赛程。';
+  const names = (data.failed || []).map(leagueZh).filter(Boolean).join('、');
+  return `${names ? names + '赛程' : '部分赛程'}未能加载，可重新加载。`;
+}
 
 const state = {
   dayKey: null,
@@ -432,15 +470,16 @@ function renderSearch() {
   });
   let note = '';
   if (!hits.length) {
-    if (search.loading) note = '正在加载球队名单…';
-    else if (!search.catalog.length) note = '球队名单暂时无法加载，请检查网络后再试。';
-    else note = `没有找到「${esc(search.query.trim())}」；只收录已配置联赛的球队。`;
+    if (search.loading) note = '搜索中…';
+    else if (!search.catalog.length) note = '暂时无法搜索球队，请稍后重新搜索。';
+    else if (search.failed) note = '部分球队未能加载，搜索结果可能不全。';
+    else note = `未找到「${esc(search.query.trim())}」，试试其他名称。`;
   } else if (hits.length > SEARCH_LIMIT) {
-    note = `还有 ${hits.length - SEARCH_LIMIT} 支，请输入更多字缩小范围`;
+    note = `还有 ${hits.length - SEARCH_LIMIT} 支球队，请输入更完整的名称。`;
   } else if (search.loading) {
-    note = '名单仍在加载，结果可能不全…';
+    note = '搜索中…';
   } else if (search.failed) {
-    note = '部分联赛名单未能加载，结果可能不全。';
+    note = '部分球队未能加载，搜索结果可能不全。';
   }
   host.innerHTML = rows.join('') + (note ? `<div class="search-note">${note}</div>` : '');
   if (restoreId != null) {
@@ -727,7 +766,7 @@ function matchRow(m, opts = {}) {
     return `<b class="sc${hw}">${hs}</b><i class="dash">–</i><b class="sc${aw}">${as}</b>`;
   })();
   const statusPart = (() => {
-    if (m.status === 'LIVE') return `<span class="dot"></span>${esc(m.minute || '直播')}`;
+    if (m.status === 'LIVE') return `<span class="dot"></span>${esc(m.minute || STATUS_LABEL.LIVE)}`;
     if (m.status === 'FT') return `完场${m.detail && m.detail !== 'FT' ? ' ' + esc(m.detail) : ''}`;
     const fallback = STATUS_LABEL[m.status] || m.status;
     if (m.status === 'SCHEDULED') {
@@ -759,20 +798,29 @@ function renderWeek() {
   const md = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
   const all = days ? days.flatMap((d) => d.matches) : [];
   const fav = all.filter(matchHasFollowed).length;
-  const incomplete = !!days && days.some((d) => d.error || (d.failed && d.failed.length) || d.stale || d.pending);
+  const summary = days && {
+    pending: days.some((d) => d.pending),
+    error: days.some((d) => d.error || (d.failed && d.failed.length)),
+    stale: days.some((d) => d.stale),
+    fetchedAt: Math.max(0, ...days.map((d) => d.fetchedAt || 0)),
+  };
+  const status = scheduleStatus(summary, state.error, state.loading);
+  const badge = status === 'ready' ? '' : UI_TEXT[status];
+  renderUpdateMeta(summary, summary && summary.pending);
   $('#heroDate').textContent = md(start);
   $('#heroWd').textContent = '整周';
   $('#heroRel').textContent = '';
-  $('#heroCount').textContent = days
-    ? `${md(start)}–${md(end)} · ${all.length} 场${fav ? ` · 关注 ${fav} 场` : ''}${incomplete ? ' · 信息不完整' : ''}`
-    : state.error ? '数据不可用' : state.loading ? '加载中…' : '赛程待确认';
+  $('#heroCount').textContent = all.length
+    ? `${md(start)}–${md(end)} · ${all.length} 场${fav ? ` · 关注 ${fav} 场` : ''}${badge ? ' · ' + badge : ''}`
+    : state.loading || (summary && summary.pending) ? UI_TEXT.loading
+      : state.error ? UI_TEXT.unavailable : !days || status !== 'ready' ? UI_TEXT.unconfirmed : UI_TEXT.emptyWeek;
 
   if (state.loading && !days) {
     root.innerHTML = skeleton();
     return;
   }
   if (state.error && (!days || !all.length)) {
-    root.innerHTML = `<div class="empty-day"><p>数据暂时拿不到</p><button class="btn" id="retry">重试</button></div>`;
+    root.innerHTML = `<div class="panel err"><p>${UI_TEXT.unavailable}</p><p class="sub">请稍后重新加载。</p><button class="btn" id="retry">${UI_TEXT.retry}</button></div>`;
     return;
   }
   if (!days) {
@@ -780,13 +828,13 @@ function renderWeek() {
     return;
   }
   const parts = [];
-  const dayIncomplete = (d) => !!(d.error || (d.failed && d.failed.length) || d.stale || d.pending);
   for (const d of days) {
+    const dayStatus = scheduleStatus(d);
     if (!d.matches.length) {
-      if (dayIncomplete(d)) {
+      if (dayStatus !== 'ready') {
         parts.push(
           `<section class="wday" id="wday-${d.dayKey}">` +
-          `<h3 class="wday-head"><b>${md(parseDayKey(d.dayKey))}</b> ${esc(weekdayOf(d.dayKey))} · 数据不完整，无法确认是否有比赛</h3>` +
+          `<h3 class="wday-head"><b>${md(parseDayKey(d.dayKey))}</b> ${esc(weekdayOf(d.dayKey))} · ${dayStatus === 'updating' ? UI_TEXT.loading : UI_TEXT.unconfirmed}</h3>` +
           `</section>`
         );
       }
@@ -799,15 +847,19 @@ function renderWeek() {
       `<section class="wday" id="wday-${d.dayKey}">` +
       `<h3 class="wday-head"><b>${md(dt)}</b> ${esc(weekdayOf(d.dayKey))}` +
       `${rel && rel !== weekdayOf(d.dayKey) ? ' · ' + esc(rel) : ''}` +
-      ` · ${d.matches.length} 场${f ? ` · <i class="fav">关注 ${f}</i>` : ''}${d.error ? ' · 不可用' : ''}</h3>` +
+      ` · ${d.matches.length} 场${f ? ` · <i class="fav">关注 ${f}</i>` : ''}${dayStatus !== 'ready' ? ' · ' + UI_TEXT[dayStatus] : ''}</h3>` +
       d.matches.map((m) => matchRow(m, { compact: true })).join('') +
       `</section>`
     );
   }
-  if (incomplete) {
-    parts.push(`<div class="empty-day"><p>${all.length ? '部分日期数据不完整' : '本周赛程数据不可用或不完整'}</p><p class="sub">暂时无法确认这一周是否有比赛，可重试。</p><button class="btn" id="retry">重试</button></div>`);
+  if (status === 'updating' && !all.length) {
+    parts.push(`<div class="panel" role="status"><p>${UI_TEXT.loading}</p></div>`);
+  } else if (status !== 'ready' && status !== 'updating') {
+    const note = status === 'stale' ? '比赛时间和比分可能有变动。'
+      : state.error ? '暂时无法更新本周赛程。' : '部分日期的赛程未能加载。';
+    parts.push(`<div class="panel"><p>${all.length ? note : UI_TEXT.unconfirmed}</p><p class="sub">${all.length ? '可重新加载查看最新赛程。' : '暂时无法确认本周是否有比赛，请稍后重新加载。'}</p><button class="btn" id="retry">${UI_TEXT.retry}</button></div>`);
   } else if (!all.length) {
-    parts.push(`<div class="empty-day"><p>这一周没有赛程</p><p class="sub">日期条上的圆点表示哪天有球</p></div>`);
+    parts.push(`<div class="panel"><p>${UI_TEXT.emptyWeek}</p><p class="sub">可切换日期或调整联赛筛选。</p></div>`);
   }
   root.innerHTML = parts.join('');
   if (focused) {
@@ -817,7 +869,7 @@ function renderWeek() {
 }
 
 function skeleton() {
-  return `<div class="skel">${Array.from({ length: 5 }, () => '<div class="skel-row"></div>').join('')}</div>`;
+  return `<div class="skel" role="status" aria-label="${UI_TEXT.loading}">${Array.from({ length: 5 }, () => '<div class="skel-row"></div>').join('')}</div>`;
 }
 
 /* 海报头：巨型日期 + 当天赛程量，随选中日/数据更新 */
@@ -830,12 +882,13 @@ function renderHero() {
   const data = state.data;
   const n = data ? data.matches.length : 0;
   const fav = data ? data.matches.filter(matchHasFollowed).length : 0;
-  const incomplete = data && (state.error || data.failed.length || data.stale || data.pending || !data.fetchedAt);
+  const status = scheduleStatus(data, state.error, state.loading);
+  const badge = status === 'ready' ? '' : UI_TEXT[status];
   $('#heroCount').textContent = n
-    ? `${n} 场${fav ? ` · 关注 ${fav} 场` : ''}${incomplete ? ' · 信息不完整' : ''}`
-    : state.error ? '数据不可用'
-      : !data ? (state.loading ? '加载中…' : '赛程待确认')
-        : incomplete ? '赛程待确认' : '无赛程';
+    ? `${n} 场${fav ? ` · 关注 ${fav} 场` : ''}${badge ? ' · ' + badge : ''}`
+    : state.loading || (data && data.pending) ? UI_TEXT.loading
+      : state.error ? UI_TEXT.unavailable
+        : !data || !data.fetchedAt || status !== 'ready' ? UI_TEXT.unconfirmed : UI_TEXT.emptyDay;
 }
 
 function renderList() {
@@ -850,6 +903,7 @@ function renderList() {
     ? { match: active.dataset.match, side: active.dataset.side, copy: active.dataset.copy,
       id: active.id, goto: active.dataset.goto } : null;
   const d = state.data;
+  renderUpdateMeta(d, d && d.pending);
 
   if (state.loading && !d) {
     root.innerHTML = skeleton();
@@ -859,15 +913,14 @@ function renderList() {
 
   if (state.error && (!d || !d.matches.length)) {
     parts.push(
-      `<div class="panel err"><p>赛程加载失败，数据暂不可用</p><p class="sub">${esc(state.error)}</p>` +
-      `<button class="btn" id="retry">重试</button></div>`
+      `<div class="panel err"><p>${UI_TEXT.unavailable}</p><p class="sub">请稍后重新加载。</p>` +
+      `<button class="btn" id="retry">${UI_TEXT.retry}</button></div>`
     );
   }
 
-  if (d && d.matches.length && (state.error || d.failed.length || d.stale || d.pending)) {
-    const names = d.failed.map((id) => (LEAGUES.find((l) => l.id === id) || { zh: id }).zh).join('、');
-    const reason = state.error ? '赛程刷新失败；' : names ? `${names} 数据不可用；` : '';
-    parts.push(`<div class="warn" role="status">${esc(reason)}当前信息不完整${d.fromCache ? '，正在展示已缓存的比赛' : ''}。可继续查看其他联赛比赛。</div>`);
+  if (d && d.matches.length) {
+    const notice = scheduleNotice(d);
+    if (notice) parts.push(`<div class="warn" role="status">${esc(notice)}</div>`);
   }
 
   if (d && d.matches.length) {
@@ -903,38 +956,36 @@ function renderList() {
   } else if (d && !state.error) {
     const nb = state.nearby || {};
     const nearBtn = (t, label) => (t
-      ? `<button class="btn near" data-goto="${t.dayKey}">${label} · ${esc(fmtDayLabel(t.dayKey))} ${esc(weekdayOf(t.dayKey))} · ${t.count}场${t.partial ? '（仅基于已缓存数据）' : ''}</button>`
+      ? `<button class="btn near" data-goto="${t.dayKey}">${label} · ${esc(fmtDayLabel(t.dayKey))} ${esc(weekdayOf(t.dayKey))} · ${t.count}场${t.partial ? '（赛程待确认）' : ''}</button>`
       : '');
-    if (!d.fetchedAt && d.pending) {
+    if (state.loading || d.pending) {
       parts.push(
-        `<div class="panel"><p>正在加载赛程…</p>` +
-        `<p class="sub">数据尚未取得，无法判断当天是否有比赛；也可以稍后点重试。</p>` +
-        `<button class="btn" id="retry">重试</button></div>`
+        `<div class="panel" role="status"><p>${UI_TEXT.loading}</p></div>`
       );
-    } else if (d.failed.length || d.stale || d.pending || !d.fetchedAt) {
+    } else if (d.failed.length || d.stale || !d.fetchedAt) {
       parts.push(
-        `<div class="panel err"><p>当前赛程数据不可用或不完整</p>` +
-        `<p class="sub">暂时无法确认当天是否有比赛；可重试、调整联赛，或查看已缓存的就近比赛。</p>` +
-        `<button class="btn" id="retry">重试</button>` +
-        `<div class="nearby">${nearBtn(nb.prev, '← 上一个已缓存比赛日')}${nearBtn(nb.next, '下一个已缓存比赛日 →')}</div></div>`
+        `<div class="panel"><p>${UI_TEXT.unconfirmed}</p>` +
+        `<p class="sub">暂时无法确认当天是否有比赛，请稍后重新加载。</p>` +
+        `<button class="btn" id="retry">${UI_TEXT.retry}</button>` +
+        `<div class="nearby">${nearBtn(nb.prev, '← 查看更早比赛')}${nearBtn(nb.next, '查看之后比赛 →')}</div></div>`
       );
     } else {
       parts.push(
-        `<div class="panel empty"><p>${esc(fmtDayLabel(state.dayKey))} · ${esc(weekdayOf(state.dayKey))} 没有所选联赛的比赛</p>` +
-        `<p class="sub">可能是国际比赛日间歇，或当天该联赛休赛；可在上方调整联赛筛选。</p>` +
-        `<div class="nearby">${nearBtn(nb.prev, '← 上一个比赛日')}${nearBtn(nb.next, '下一个比赛日 →')}</div></div>`
+        `<div class="panel empty"><p>当天暂无所选联赛或关注球队的比赛</p>` +
+        `<p class="sub">可切换日期或调整联赛筛选。</p>` +
+        `<div class="nearby">${nearBtn(nb.prev, '← 查看更早比赛')}${nearBtn(nb.next, '查看之后比赛 →')}</div></div>`
       );
     }
     const pv = state.preview;
     if (pv) {
-      const title = pv.kind === 'followed' ? '你关注的球队 · 已缓存比赛' : '已缓存的比赛';
+      const title = pv.kind === 'followed' ? '关注球队赛程预览' : '赛程预览';
       parts.push(
         `<section class="league"><header class="lg-head"><h2>${title}</h2>` +
-        `<span class="lg-en">${esc(fmtDayLabel(pv.dayKey))} ${esc(weekdayOf(pv.dayKey))}</span>` +
         `<span class="lg-count">${pv.count}场</span></header>` +
-        `${pv.partial ? '<div class="warn">仅基于已缓存数据，不保证是最近的比赛。</div>' : ''}` +
+        `<p class="preview-date">${esc(fmtDayLabel(pv.dayKey))} ${esc(weekdayOf(pv.dayKey))}</p>` +
+        `${pv.partial ? '<p class="preview-note">其他日期可能还有比赛，以下赛程仅供参考。</p>' : ''}` +
         pv.matches.slice(0, 8).map((m) => matchRow(m, { tag: pv.kind === 'followed', copy: 'preview' })).join('') +
-        `<div class="more"><button class="btn" data-goto="${pv.dayKey}">查看当天已缓存的 ${pv.total} 场 →</button></div>` +
+        `<div class="more"><button class="btn" data-goto="${pv.dayKey}">查看当天比赛 →</button></div>` +
         `</section>`
       );
     }
@@ -950,14 +1001,10 @@ function renderList() {
       || root.querySelector('button');
     button?.focus({ preventScroll: true });
   }
-  $('#refresh') && $('#refresh').classList.toggle('busy', state.loading);
   reportMissingNames();
-  $('#updated').textContent = d && d.fetchedAt
-    ? `更新于 ${fmtClock(d.fetchedAt)}${d.pending ? ' · 更新中…' : d.fromCache ? ' · 缓存' : ''}`
-    : '';
 }
 
-/* 面板“已缓存下一场赛程”：只扫本地月缓存（零联网），仅在面板打开时计算，
+/* 面板赛程预览：只扫本地月缓存（零联网），仅在面板打开时计算，
    关注/数据/缓存变化后由 invalidateFollowNext() 失效重算 */
 let followNextMemo = null;
 
@@ -996,10 +1043,10 @@ function followNextList() {
 }
 
 function followNextText(m) {
-  if (!m) return '暂无已缓存赛程';
+  if (!m) return '暂未查到赛程';
   const d = new Date(m.start);
   const when = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  return `已缓存下一场赛程：${when} · ${leagueZh(m.league) || m.league} · ${teamName(m.home)} vs ${teamName(m.away)}`;
+  return `赛程预览：${[when, leagueZh(m.league), `${teamName(m.home)} vs ${teamName(m.away)}`].filter(Boolean).join(' · ')}`;
 }
 
 function focusFollowToggle() {
@@ -1022,7 +1069,7 @@ function renderFollow() {
     pendingFollowFocus = null;
   }
   if (!count) {
-    host.innerHTML = `<div class="follow-empty">还没有关注球队；搜索球队名，或点赛程里的 ☆ 即可关注。</div>`;
+    host.innerHTML = `<div class="follow-empty">暂无关注球队。搜索球队或点击比赛中的 ☆ 添加关注。</div>`;
     if (restoreIdx != null) focusFollowToggle(); /* 删空了：焦点回到面板开关，不落到 body */
     return;
   }
@@ -1036,7 +1083,7 @@ function renderFollow() {
       `<span class="follow-team-name">${esc(name)}</span>` +
       (meta ? `<span class="follow-team-meta">${esc(meta)}</span>` : '') +
       (next === undefined ? '' : `<span class="follow-team-next">${esc(followNextText(next))}</span>`) +
-      `<button type="button" class="follow-remove" data-follow-idx="${idx}" aria-label="${esc('取消关注 ' + name)}">移除</button>` +
+      `<button type="button" class="follow-remove" data-follow-idx="${idx}" aria-label="${esc('取消关注 ' + name)}">取消关注</button>` +
       `</div>`
     );
   }).join('');
@@ -1052,16 +1099,13 @@ function renderFollow() {
 /* 名称未知的旧 id-only 档案：诚实占位，不编造队名；观察到比赛后由补全逻辑填上 */
 function followDisplayName(rec) {
   if (rec.name) return teamName(rec);
-  if (rec.id) return `ID ${rec.id} · 名称未知`;
+  if (rec.id) return '球队名称待补全';
   if (rec.names && rec.names.length) return `${rec.names[0]}（名称待确认）`;
-  return '未知球队';
+  return '球队名称待补全';
 }
 
 function followMetaText(rec) {
-  const lg = (rec.leagues || []).map((id) => leagueZh(id) || id);
-  const parts = [lg.length ? lg.join(' · ') : '联赛未知'];
-  if (rec.name && rec.id) parts.push(`ID ${rec.id}`);
-  return parts.join(' · ');
+  return (rec.leagues || []).map(leagueZh).filter(Boolean).join(' · ');
 }
 
 function toggleFollowPanel() {
@@ -1184,7 +1228,7 @@ async function reloadWeek(opts = {}) {
           onUpdate: (fresh) => {
             /* 后台重验完成：把该天替换为新数据 */
             if (seq !== loadSeq || state.view !== 'week') return;
-            const updated = { dayKey: key, matches: fresh.matches, failed: fresh.failed, stale: fresh.stale, pending: fresh.pending };
+            const updated = { dayKey: key, matches: fresh.matches, failed: fresh.failed, stale: fresh.stale, pending: fresh.pending, fetchedAt: fresh.fetchedAt };
             if (!committed) {
               earlyUpdates.set(key, updated);
               return;
@@ -1197,7 +1241,7 @@ async function reloadWeek(opts = {}) {
             render();
           },
         });
-        return { dayKey: key, matches: d.matches, failed: d.failed, stale: d.stale, pending: d.pending };
+        return { dayKey: key, matches: d.matches, failed: d.failed, stale: d.stale, pending: d.pending, fetchedAt: d.fetchedAt };
       } catch (e) {
         return { dayKey: key, matches: [], failed: ['*'], error: true };
       }
@@ -1397,8 +1441,7 @@ function bind() {
 function timezoneNote() {
   const off = -new Date().getTimezoneOffset() / 60;
   const sign = off >= 0 ? '+' : '−';
-  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-  $('#tz').textContent = `时间：本机时区 UTC${sign}${Math.abs(off)}${zone ? ' · ' + zone : ''}`;
+  $('#tz').textContent = `时间：本地时区（UTC${sign}${Math.abs(off)}）`;
 }
 
 bind();
