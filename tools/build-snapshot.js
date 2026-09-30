@@ -18,7 +18,9 @@ const vm = require('node:vm');
 
 const root = path.join(__dirname, '..');
 const OUT = path.join(root, 'snapshot', 'schedule.json');
-const MAX_AGE_MS = 6 * 3600e3;
+// 小于 3 小时调度间隔：即使赛事内容不变，也发布本轮核对后的时间戳。
+// 否则同内容快照被跳过两轮，前端 6 小时有效期会先耗尽。
+const MAX_AGE_MS = 2 * 3600e3;
 const CONCURRENCY = 4;
 const ATTEMPTS = 3;
 const TIMEOUT_MS = 20000;
