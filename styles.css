@@ -610,16 +610,6 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .day { padding: 6px 0 5px; }
 }
 
-/* ---------- 页脚：日历导出 ---------- */
-.foot-export { display: inline-flex; align-items: center; gap: 8px; }
-.foot-btn {
-  font-family: var(--body); font-size: 12px; color: var(--accent);
-  background: var(--card); border: 1px solid transparent; border-radius: 6px;
-  padding: 3px 10px; cursor: pointer;
-}
-.foot-btn:hover, .foot-btn:focus-visible { border-color: var(--accent); color: var(--accent); }
-.foot-btn:disabled { opacity: 0.5; cursor: default; }
-.foot-note { color: var(--muted); font-size: 11px; }
 .status .cd { color: var(--accent); font-variant-numeric: tabular-nums; }
 
 /* ---------- 视图切换 / 周视图 ---------- */

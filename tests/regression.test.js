@@ -69,13 +69,11 @@ function harness(entries = [], withApp = false) {
       '#list', '#refresh', '#updated', '#goToday', '#prevDay', '#nextDay', '#tz',
       '#heroDate', '#heroWd', '#heroRel', '#heroCount',
       '#followToggle', '#followCount', '#followManager', '#followTeams', '#followSearch', '#followResults',
-      '#icsNote', '#exportIcs', '#viewDay', '#viewWeek']) elements[selector] = el(selector);
+      '#viewDay', '#viewWeek']) elements[selector] = el(selector);
     elements['#followManager'].setAttribute('hidden', ''); // 与 index.html 初始一致：面板默认收起
     elements['#followToggle'].setAttribute('aria-expanded', 'false');
   }
   const winListeners = new Map();
-  const blobs = [];
-  const downloads = [];
   let attempts = 0;
   let fetchImpl = async () => { throw new Error('offline'); };
   /* 可控时钟（仅 withApp 注入）：默认与真实时间逐毫秒一致；h.advance(ms) 前移，
@@ -117,16 +115,6 @@ function harness(entries = [], withApp = false) {
     clearTimeout: (id) => clearImmediate(id),
   };
   if (withApp) {
-    /* 导出链路的最小替身：捕获 Blob 内容与下载动作，便于断言生成的日历文本 */
-    globals.Blob = class Blob {
-      constructor(parts, opts) {
-        this.parts = parts;
-        this.type = (opts && opts.type) || '';
-        blobs.push(this);
-      }
-      get text() { return this.parts.join(''); }
-    };
-    globals.URL = { createObjectURL: () => 'blob:test', revokeObjectURL() {} };
     globals.document = {
       activeElement: { matches: () => false, dataset: {} },
       hidden: false,
@@ -140,11 +128,7 @@ function harness(entries = [], withApp = false) {
       dispatch(type, event) {
         for (const fn of [...(this.listeners.get(type) || [])]) fn(event);
       },
-      createElement: (tag) => {
-        const node = el(tag);
-        node.click = () => downloads.push(node);
-        return node;
-      },
+      createElement: (tag) => el(tag),
       body: { appendChild() {} },
     };
     globals.navigator = {};
@@ -175,8 +159,6 @@ function harness(entries = [], withApp = false) {
     fireWindow: (type, event) => {
       for (const fn of [...(winListeners.get(type) || [])]) fn(event);
     },
-    blobs,
-    downloads,
   };
 }
 
@@ -579,56 +561,6 @@ test('empty-day followed preview searches disabled leagues of followed teams', a
   assert.ok(h.elements['#list'].innerHTML.includes('你关注的球队'));
 });
 
-test('export covers followed teams in disabled leagues and marks partial data', async () => {
-  const h = harness([['fs1.enabled', '["eng.1"]']], true);
-  const day = futureDayKey(10);
-  const yms = new Set(h.call(`monthsForDay('${day}')`));
-  for (const ym of h.call(`monthsForDay(addDays('${day}', 40))`)) yms.add(ym); // 同一赛事落入两个月缓存，验证去重
-  const futureMatch = match('evt-followed', 'ita.1', 1, '42', 9);
-  futureMatch.start = `${day}T15:00:00.000Z`;
-  h.call("toggleFollow({ name: 'Home', teamId: '42', league: 'ita.1' })");
-  for (const ym of yms) seedMonth(h, 'ita.1', ym, [futureMatch]);
-  await h.call('exportCalendar()');
-  assert.equal(h.call("state.enabled.has('ita.1')"), false); // ita.1 是停用联赛
-  assert.equal(h.downloads.length, 1);
-  assert.equal(h.blobs.length, 1);
-  const ics = h.blobs[0].parts.join('');
-  assert.equal((ics.match(/UID:evt-followed@football-schedule/g) || []).length, 1); // 去重后仅一条 VEVENT
-  assert.ok(ics.includes('BEGIN:VCALENDAR'));
-  assert.ok(ics.endsWith('END:VCALENDAR\r\n'));
-  const note = h.elements['#icsNote'].textContent;
-  assert.match(note, /已导出 1 场/);
-  assert.match(note, /可能有遗漏/); // 其余联赛数据过期/拿不到 → 如实提示可能有遗漏
-  assert.ok(!note.includes('没有关注球队的赛程'));
-});
-
-test('export failure never claims there are no future fixtures', async () => {
-  const h = harness([['fs1.enabled', '["eng.1"]']], true);
-  /* 没有关注球队时给出引导文案 */
-  await h.call('exportCalendar()');
-  assert.equal(h.elements['#icsNote'].textContent, '先点 ☆ 关注球队，再来导出');
-  h.call("toggleFollow({ name: 'Home', teamId: '42', league: 'eng.1' })");
-  /* 全部联赛×月都拿不到数据（默认 fetch 直接失败）：必须承认无法确认，而非谎称没有 */
-  await h.call('exportCalendar()');
-  const note = h.elements['#icsNote'].textContent;
-  assert.ok(!note.includes('没有关注球队的赛程'));
-  assert.match(note, /未能确认/);
-  assert.match(note, /不可用/);
-  assert.equal(h.blobs.length, 0);
-  assert.equal(h.downloads.length, 0);
-});
-
-test('export reports none only when every league month actually loaded', async () => {
-  const h = harness([['fs1.enabled', '["eng.1"]']], true);
-  h.setFetch(async () => ({ ok: true, json: async () => ({ leagues: [], events: [] }) }));
-  h.call("toggleFollow({ name: 'Home', teamId: '42', league: 'eng.1' })");
-  await h.call('exportCalendar()');
-  const note = h.elements['#icsNote'].textContent;
-  assert.ok(note.includes(`未来 60 天没有关注球队的赛程`)); // 确实全量加载且无未来赛事 → 才允许说“没有”
-  assert.equal(h.blobs.length, 0);
-  assert.equal(h.downloads.length, 0);
-});
-
 test('empty-day generic nearby ignores disabled-league non-followed matches', async () => {
   const h = harness([['fs1.enabled', '["eng.1"]']], true);
   /* 非关注球队的比赛夹具（名字与关注球队不同，避免按名字误判为关注） */
@@ -664,77 +596,6 @@ test('empty-day generic nearby ignores disabled-league non-followed matches', as
   /* kind='any' 的预览只加载启用联赛：不含 esp.1 的同日比赛 */
   assert.equal(pv.matches.length, 1);
   assert.equal(pv.matches[0].id, 'eng-later');
-});
-
-test('export with only stale cached data reports inability to confirm', async () => {
-  const h = harness([['fs1.enabled', '["eng.1"]']], true);
-  /* 每个目标月都有过期旧缓存且零赛事：联网失败回落 stale:true → 绝不能宣称“没有” */
-  const staleAt = Date.now() - 2 * 864e5;
-  const today = h.call('dayKeyOf(new Date())');
-  const yms = new Set();
-  for (let i = 0; i < 60; i++) {
-    for (const ym of h.call(`monthsForDay(addDays('${today}', ${i}))`)) yms.add(ym);
-  }
-  for (const lg of h.call('LEAGUES.map((l) => l.id)')) {
-    for (const ym of yms) seedMonth(h, lg, ym, [], staleAt);
-  }
-  h.call("toggleFollow({ name: 'Home', teamId: '42', league: 'eng.1' })");
-  await h.call('exportCalendar()');
-  const note = h.elements['#icsNote'].textContent;
-  assert.ok(!note.includes('没有关注球队的赛程'));
-  assert.match(note, /未能确认/);
-  assert.equal(h.blobs.length, 0);
-  assert.equal(h.downloads.length, 0);
-});
-
-test('export from stale cache with fixtures still exports but flags possible gaps', async () => {
-  const h = harness([['fs1.enabled', '["eng.1"]']], true);
-  const staleAt = Date.now() - 2 * 864e5;
-  const day = futureDayKey(10);
-  const today = h.call('dayKeyOf(new Date())');
-  const yms = new Set();
-  for (let i = 0; i < 60; i++) {
-    for (const ym of h.call(`monthsForDay(addDays('${today}', ${i}))`)) yms.add(ym);
-  }
-  const staleMatch = match('stale-future', 'ita.1', 1, '42', 9);
-  staleMatch.start = `${day}T15:00:00.000Z`;
-  const matchYms = h.call(`monthsForDay('${day}')`);
-  h.call("toggleFollow({ name: 'Home', teamId: '42', league: 'ita.1' })");
-  for (const lg of h.call('LEAGUES.map((l) => l.id)')) {
-    for (const ym of yms) {
-      seedMonth(h, lg, ym, lg === 'ita.1' && matchYms.includes(ym) ? [staleMatch] : [], staleAt);
-    }
-  }
-  await h.call('exportCalendar()');
-  assert.equal(h.downloads.length, 1);
-  assert.ok(h.blobs[0].parts.join('').includes('UID:stale-future@football-schedule'));
-  const note = h.elements['#icsNote'].textContent;
-  assert.match(note, /已导出 1 场/); // 有缓存赛事 → 允许导出
-  assert.match(note, /可能有遗漏/); // 但旧数据不能当作完整 → 必须标部分
-  assert.ok(!note.includes('没有关注球队的赛程'));
-});
-
-test('export respects the 60-day window even when month cache holds farther events', async () => {
-  const h = harness([['fs1.enabled', '["eng.1"]']], true);
-  /* 第 60 天内的赛事：本地正午的第 59 天 */
-  const inDay = futureDayKey(59);
-  const inDate = new Date(`${inDay}T12:00:00`);
-  const near = {
-    id: 'in-window', league: 'ita.1', start: inDate.toISOString(),
-    status: 'SCHEDULED', home: { name: 'Home', teamId: '42' }, away: { name: 'Away', teamId: '99' },
-  };
-  /* 同月但已在窗口外：优先取该月最后一天（必然 ≥ 第 60 天）；恰好是月末时退到第 61 天 */
-  const monthEnd = new Date(inDate.getFullYear(), inDate.getMonth() + 1, 0, 12);
-  const farDate = monthEnd.getTime() > inDate.getTime() ? monthEnd : new Date(`${futureDayKey(61)}T12:00:00`);
-  const far = { ...near, id: 'out-of-window', start: farDate.toISOString() };
-  h.call("toggleFollow({ name: 'Home', teamId: '42', league: 'ita.1' })");
-  for (const ym of h.call(`monthsForDay('${inDay}')`)) seedMonth(h, 'ita.1', ym, [near, far]);
-  await h.call('exportCalendar()');
-  assert.equal(h.downloads.length, 1);
-  const ics = h.blobs[0].parts.join('');
-  assert.ok(ics.includes('UID:in-window@football-schedule')); // 第 60 天内保留
-  assert.ok(!ics.includes('UID:out-of-window@football-schedule')); // 第 61 天或更远（同月抓取）不得进入
-  assert.match(h.elements['#icsNote'].textContent, /已导出 1 场/);
 });
 
 test('date strip dots distinguish confirmed-empty from uncached days', () => {
@@ -919,25 +780,6 @@ test('minute tick requests a refresh after a scheduled kickoff passes', () => {
   h.advance(new Date(h.context.fixture.start).getTime() - Date.now() + 60_000);
   h.call('minuteTick()');
   assert.equal(h.call('refreshCalls'), 1);
-});
-
-test('buildIcs 生成合法 iCalendar：转义、VALARM、行折叠', () => {
-  const h = harness([], true);
-  const m = match('evt-1', 'eng.1', 28);
-  m.home.name = 'A, B; C';
-  h.context.fixture = m;
-  const ics = h.call("buildIcs([fixture], { title: 'T' })");
-  assert.ok(ics.includes('BEGIN:VCALENDAR'));
-  assert.ok(ics.includes('BEGIN:VEVENT'));
-  assert.ok(ics.includes('UID:evt-1@football-schedule'));
-  assert.ok(ics.includes(`DTSTART:${new Date(m.start).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}`));
-  assert.ok(ics.includes('TRIGGER:-PT15M'));
-  assert.ok(ics.includes('ACTION:DISPLAY'));
-  assert.ok(ics.includes('A\\, B\\; C'));
-  assert.ok(ics.endsWith('END:VCALENDAR\r\n'));
-  for (const line of ics.split('\r\n')) {
-    if (line) assert.ok(Buffer.byteLength(line, 'utf8') <= 75, `line too long: ${line}`);
-  }
 });
 
 /* ---------- 球队搜索 ---------- */

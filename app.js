@@ -93,7 +93,7 @@ function crestImg(lgId, url) {
  * - names 存归一化名字（含 TEAM_ZH 别名键），是身份的权威来源；
  * - id 只是辅助：ESPN 可能复用 ID，已知名称的档案遇到同 ID 但名字不同 → 视为不同队；
  *   只有 id-only 的旧档案（还没观察到球队）才按 ID 命中；
- * - leagues 只作提示（导出/空日预览），从不参与身份判定；
+ * - leagues 只作提示（空日预览），从不参与身份判定；
  * - isFollowed/matchHasFollowed 纯函数：渲染期间绝不写存储、不改状态，
  *   名称/ID 补全只发生在显式的 enrichFollowedFromMatches（数据加载路径）里。
  */
@@ -1312,152 +1312,6 @@ function setView(view) {
   reload();
 }
 
-/* ---------- 日历导出（.ics） ----------
- * 把关注球队的未来赛程生成 iCalendar 文件供手机日历导入，事件自带开赛前 15 分钟提醒。
- * 纯前端生成，不上传任何数据；扫描全部已配置联赛（含已停用的）× 未来两个月的月度数据，
- * 与日期视图共享本地缓存；缺失或过期回退的组合都计入“不完整”并在提示里如实标注，
- * 绝不谎称“没有赛程”。
- */
-const ICS_DAYS = 60;
-const ICS_MATCH_SPAN_MS = 2 * 3600 * 1000;
-let exportingIcs = false;
-
-function icsEsc(s) {
-  return String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
-}
-
-function icsTime(date) {
-  return new Date(date).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-}
-
-/* RFC 5545 行折叠：每行 ≤75 字节（UTF-8），续行以空格开头，不切断多字节字符 */
-function foldIcsLine(line) {
-  const enc = new TextEncoder();
-  const out = [];
-  let cur = '';
-  let curBytes = 0;
-  for (const ch of line) {
-    const b = enc.encode(ch).length;
-    if (curBytes + b > 75) {
-      out.push(cur);
-      cur = ' ';
-      curBytes = 1;
-    }
-    cur += ch;
-    curBytes += b;
-  }
-  out.push(cur);
-  return out.join('\r\n');
-}
-
-function buildIcs(matches, opts = {}) {
-  const now = icsTime(new Date());
-  const title = opts.title || '足球赛程';
-  const tz = (typeof Intl !== 'undefined' && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'UTC';
-  const lines = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'CALSCALE:GREGORIAN',
-    'PRODID:-//football-schedule//fixtures//ZH',
-    `X-WR-CALNAME:${icsEsc(title)}`,
-    `X-WR-TIMEZONE:${icsEsc(tz)}`,
-  ];
-  for (const m of matches) {
-    const summary = `⚽ ${teamName(m.home)} vs ${teamName(m.away)}（${leagueZh(m.league)}）`;
-    const desc = `${leagueZh(m.league)} · ${teamName(m.home)} vs ${teamName(m.away)}`;
-    lines.push(
-      'BEGIN:VEVENT',
-      `UID:${icsEsc(m.id)}@football-schedule`,
-      `DTSTAMP:${now}`,
-      `DTSTART:${icsTime(m.start)}`,
-      `DTEND:${icsTime(new Date(new Date(m.start).getTime() + ICS_MATCH_SPAN_MS))}`,
-      `SUMMARY:${icsEsc(summary)}`,
-      `DESCRIPTION:${icsEsc(desc)}`,
-      'BEGIN:VALARM',
-      'TRIGGER:-PT15M',
-      'ACTION:DISPLAY',
-      `DESCRIPTION:${icsEsc(summary)}`,
-      'END:VALARM',
-      'END:VEVENT',
-    );
-  }
-  lines.push('END:VCALENDAR');
-  return lines.map(foldIcsLine).join('\r\n') + '\r\n';
-}
-
-async function exportCalendar() {
-  if (exportingIcs) return;
-  const btn = $('#exportIcs');
-  const note = $('#icsNote');
-  if (!state.followed.length) {
-    if (note) note.textContent = '先点 ☆ 关注球队，再来导出';
-    return;
-  }
-  exportingIcs = true;
-  if (btn) btn.disabled = true;
-  try {
-    if (note) note.textContent = '正在收集赛程…';
-    /* 覆盖全部已配置联赛（含已停用的）：关注球队可能来自被筛掉的联赛 */
-    const leagues = LEAGUES.map((l) => l.id);
-    const todayKey = dayKeyOf(new Date());
-    const yms = new Set();
-    for (let i = 0; i < ICS_DAYS; i++) {
-      for (const ym of monthsForDay(addDays(todayKey, i))) yms.add(ym);
-    }
-    /* 区间 [今天, 今天+ICS_DAYS 天)（本机时区）：yms 覆盖末月整月，
-       只按 start>now 过滤会把第 61 天到月末的比赛也导出，必须按天截断 */
-    const rangeEnd = parseDayKey(addDays(todayKey, ICS_DAYS)).getTime();
-    const jobs = [];
-    for (const leagueId of leagues) for (const ym of yms) jobs.push({ leagueId, ym });
-    const now = Date.now();
-    const picked = new Map();
-    /* 不完整 = 拿不到数据（!data）或失败回退旧缓存（r.stale，能导出缓存赛事但可能缺改期/新赛程）。
-       两种都计入，结果里明确标注“不完整/可能遗漏”，绝不据此宣称“没有赛程”。 */
-    let incomplete = 0;
-    await mapLimit(jobs, 6, async ({ leagueId, ym }) => {
-      let r = null;
-      try { r = await ensureMonth(leagueId, ym); } catch (e) { r = null; }
-      if (!r || !r.data) {
-        incomplete += 1;
-        return;
-      }
-      if (r.stale) incomplete += 1;
-      for (const m of (r.data.events || [])) {
-        const ts = new Date(m.start).getTime();
-        if (ts > now && ts < rangeEnd && matchHasFollowed(m)) picked.set(m.id, m);
-      }
-    });
-    const rows = [...picked.values()].sort((a, b) => (a.start < b.start ? -1 : 1));
-    if (!rows.length) {
-      /* 数据不全时绝不谎称“没有赛程”，如实说明无法确认 */
-      if (note) {
-        note.textContent = incomplete
-          ? `数据不完整（部分联赛数据过期或不可用），未能确认未来 ${ICS_DAYS} 天的赛程；请稍后重试`
-          : `未来 ${ICS_DAYS} 天没有关注球队的赛程`;
-      }
-      return;
-    }
-    const blob = new Blob([buildIcs(rows, { title: '足球赛程 · 我的关注' })], { type: 'text/calendar;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'fixtures-followed.ics';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-    if (note) {
-      note.textContent = `已导出 ${rows.length} 场（开赛前 15 分钟提醒）` +
-        (incomplete ? '；部分联赛数据过期或不可用，可能有遗漏' : '');
-    }
-  } catch (e) {
-    if (note) note.textContent = '导出失败：' + ((e && e.message) || '未知错误');
-  } finally {
-    exportingIcs = false;
-    if (btn) btn.disabled = false;
-  }
-}
-
 /* ---------- 事件绑定 ---------- */
 
 function bind() {
@@ -1499,7 +1353,6 @@ function bind() {
     if (e.target.id === 'retry') reload({ force: true });
   });
   $('#refresh').addEventListener('click', () => reload({ force: true }));
-  $('#exportIcs') && $('#exportIcs').addEventListener('click', exportCalendar);
   $('#followToggle') && $('#followToggle').addEventListener('click', toggleFollowPanel);
   $('#followSearch') && $('#followSearch').addEventListener('input', onSearchInput);
   $('#followSearch') && $('#followSearch').addEventListener('focus', loadCatalog);
