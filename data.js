@@ -63,7 +63,8 @@ function monthsForDay(dayKey) {
 /* ---------- 缓存 ---------- */
 
 const CACHE_PREFIX = 'fs1|';
-const CACHE_MAX_ENTRIES = 80;
+// 25 项赛事 × 4 个月的快照，并留出少量翻月余量。
+const CACHE_MAX_ENTRIES = 128;
 
 const memStore = new Map();
 const storage = (() => {
@@ -213,6 +214,16 @@ function normalizeLeagueMeta(json, leagueId) {
   return { id: leagueId, logo: (pick && pick.href) || '' };
 }
 
+function normalizeMonthData(json, leagueId, fetchedAt = Date.now()) {
+  /* 错误响应/字段变化不能当成“这个月没有比赛”。 */
+  if (!json || !Array.isArray(json.events)) throw new Error('Invalid scoreboard response');
+  return {
+    fetchedAt,
+    league: normalizeLeagueMeta(json, leagueId),
+    events: json.events.map((ev) => normalizeEvent(ev, leagueId)),
+  };
+}
+
 const inflight = new Map();
 
 /* 网络熔断：短时间连败后进入冷却期，抓取快速失败回落缓存，避免弱网下长时间空转 */
@@ -238,14 +249,10 @@ function networkCoolingDown() {
 function fetchMonth(leagueId, ym) {
   const key = cacheKey(leagueId, ym);
   if (inflight.has(key)) return inflight.get(key);
-  const p = fetchJson(`${ESPN_BASE}/${leagueId}/scoreboard?dates=${ym}`)
+  const p = fetchJson(`${ESPN_BASE}/${leagueId}/scoreboard?dates=${ym}&limit=1000`)
     .then((json) => {
+      const data = normalizeMonthData(json, leagueId);
       noteNetResult(true);
-      const data = {
-        fetchedAt: Date.now(),
-        league: normalizeLeagueMeta(json, leagueId),
-        events: (json.events || []).map((ev) => normalizeEvent(ev, leagueId)),
-      };
       writeCache(leagueId, ym, data);
       return { data, fromCache: false };
     })
@@ -259,7 +266,7 @@ function fetchMonth(leagueId, ym) {
 }
 
 /* ---------- 同源快照（冷启动兜底） ----------
- * snapshot/schedule.json 由 GitHub Actions 定时生成（tools/build-snapshot.js），格式与月缓存一致。
+ * snapshot/schedule.json 由 GitHub Actions 定时生成（tools/build-snapshot.js），包含月赛程和球队名单。
  * 新设备没有任何缓存、浏览器直连 ESPN 又慢或不通时，先用它出数据；写入缓存后照常按 TTL 判过期并联网更新。
  * 成功后会话内复用，手动刷新可重取；file:// 或取不到不影响直连流程。 */
 
@@ -282,9 +289,8 @@ function seedFromSnapshot(opts = {}) {
     })
     .then((snap) => {
       const months = snap && snap.months;
-      if (!months || typeof months !== 'object') return false;
       let seeded = false;
-      for (const key of Object.keys(months)) {
+      for (const key of Object.keys(months && typeof months === 'object' ? months : {})) {
         const [leagueId, ym] = key.split('|');
         const raw = months[key];
         if (!leagueId || !/^\d{6}$/.test(ym || '') || !raw || !Array.isArray(raw.events)
@@ -296,6 +302,18 @@ function seedFromSnapshot(opts = {}) {
         /* 批量写入，最后统一淘汰一次（逐条 pruneCache 会反复解析全部缓存） */
         cacheMemo.set(cacheKey(leagueId, ym), entry);
         try { storage.setItem(cacheKey(leagueId, ym), JSON.stringify(entry)); } catch (e) { /* 配额满：只留内存副本 */ }
+        seeded = true;
+      }
+      const teams = snap && snap.teams;
+      for (const leagueId of Object.keys(teams && typeof teams === 'object' ? teams : {})) {
+        const entry = teams[leagueId];
+        if (!entry || !Number.isFinite(entry.fetchedAt) || entry.fetchedAt <= 0
+          || !Array.isArray(entry.teams) || !entry.teams.length
+          || !entry.teams.every((t) => t && typeof t.id === 'string' && t.id
+            && typeof t.name === 'string' && t.name)) continue;
+        const local = readTeamsCache(leagueId);
+        if (local && local.fetchedAt >= entry.fetchedAt) continue;
+        writeTeamsCache(leagueId, { ...entry, source: 'snapshot' });
         seeded = true;
       }
       if (seeded) pruneCache();
@@ -353,6 +371,11 @@ function normalizeTeamEntry(t) {
   };
 }
 
+function normalizeTeams(json) {
+  const lg = json.sports && json.sports[0] && json.sports[0].leagues && json.sports[0].leagues[0];
+  return ((lg && lg.teams) || []).map((x) => normalizeTeamEntry(x && x.team)).filter(Boolean);
+}
+
 function readTeamsCache(leagueId) {
   if (teamsMemo.has(leagueId)) return teamsMemo.get(leagueId);
   let val = null;
@@ -379,11 +402,10 @@ function writeTeamsCache(leagueId, data) {
 function fetchTeams(leagueId) {
   const key = `teams|${leagueId}`;
   if (inflight.has(key)) return inflight.get(key);
-  const p = fetchJson(`${ESPN_BASE}/${leagueId}/teams`)
+  const p = fetchJson(`${ESPN_BASE}/${leagueId}/teams?limit=1000`)
     .then((json) => {
       noteNetResult(true);
-      const lg = json.sports && json.sports[0] && json.sports[0].leagues && json.sports[0].leagues[0];
-      const teams = ((lg && lg.teams) || []).map((x) => normalizeTeamEntry(x && x.team)).filter(Boolean);
+      const teams = normalizeTeams(json);
       const data = { fetchedAt: Date.now(), teams };
       /* 空名单不覆盖旧缓存（接口偶发返回空壳） */
       if (teams.length) writeTeamsCache(leagueId, data);
@@ -400,10 +422,17 @@ function fetchTeams(leagueId) {
 
 /* 取某联赛球队名单 → { teams, stale, failed }；缓存新鲜直接用，冷却期不发网络 */
 async function ensureTeams(leagueId, opts = {}) {
-  const cached = readTeamsCache(leagueId);
-  const fresh = !!cached && Date.now() - cached.fetchedAt < TEAMS_TTL_MS;
-  if (fresh && !opts.force) return { teams: cached.teams, stale: false, failed: false };
-  const fallback = () => ({ teams: cached ? cached.teams : [], stale: !!cached, failed: !cached });
+  const isFresh = (data) => !!data && Date.now() - data.fetchedAt < TEAMS_TTL_MS;
+  let cached = readTeamsCache(leagueId);
+  if (isFresh(cached) && !opts.force) return { teams: cached.teams, stale: false, failed: false };
+  // 手机搜索先用同源名单；与赛程加载共享同一次快照请求。
+  await seedFromSnapshot();
+  cached = readTeamsCache(leagueId);
+  if (isFresh(cached) && !opts.force) return { teams: cached.teams, stale: false, failed: false };
+  const fallback = () => {
+    const latest = readTeamsCache(leagueId);
+    return { teams: latest ? latest.teams : [], stale: !!latest && !isFresh(latest), failed: !latest };
+  };
   if (networkCoolingDown() && !opts.force) return fallback();
   try {
     const data = await fetchTeams(leagueId);
