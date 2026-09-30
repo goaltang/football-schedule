@@ -3,7 +3,7 @@
  *
  * 新设备首次打开时本地没有缓存，若浏览器直连 ESPN 慢或不通就会一直“加载中”。
  * 本脚本由 GitHub Actions 定时运行（.github/workflows/refresh-snapshot.yml），
- * 把所有赛事「上月 ~ 后两个月」的整月赛程和完整球队名单拉下来，按 data.js 同一套归一化写成与本地缓存
+ * 把所有赛事「上月 ~ 后两个月」的整月赛程拉下来，按 data.js 同一套归一化写成与本地缓存
  * 同格式的条目，随页面同源部署；前端冷启动时先用它出数据，再在后台联网更新。
  *
  * - 某联赛某月抓取失败：沿用上一份快照里的旧条目，不让一次抖动清空数据
@@ -30,8 +30,8 @@ const { LEAGUES } = require(path.join(root, 'config.js'));
 /* 复用数据层的归一化，保证与浏览器缓存格式一致 */
 const ctx = vm.createContext({ window: {}, Intl, AbortController, setTimeout, clearTimeout, fetch, console });
 vm.runInContext(fs.readFileSync(path.join(root, 'data.js'), 'utf8'), ctx, { filename: 'data.js' });
-const { ESPN_BASE, normalizeMonthData, normalizeTeams, etBucketOf } =
-  vm.runInContext('({ ESPN_BASE, normalizeMonthData, normalizeTeams, etBucketOf })', ctx);
+const { ESPN_BASE, normalizeMonthData, etBucketOf } =
+  vm.runInContext('({ ESPN_BASE, normalizeMonthData, etBucketOf })', ctx);
 
 /* 与 data.js 的月份口径一致：按美东日期取“上月、本月、后两个月” */
 function monthsWindow() {
@@ -74,18 +74,14 @@ async function mapLimit(items, limit, fn) {
 }
 
 /* 忽略时间戳的内容指纹，用来判断“是否真的变了” */
-function fingerprint(months, teams = {}) {
-  return JSON.stringify({
-    months: Object.keys(months).sort().map((k) => [k, months[k].league, months[k].events]),
-    teams: Object.keys(teams).sort().map((k) => [k, teams[k].teams]),
-  });
+function fingerprint(months) {
+  return JSON.stringify(Object.keys(months).sort().map((k) => [k, months[k].league, months[k].events]));
 }
 
 async function main() {
   let prev = null;
   try { prev = JSON.parse(fs.readFileSync(OUT, 'utf8')); } catch (e) { /* 首次生成 */ }
   const prevMonths = (prev && prev.months) || {};
-  const prevTeams = (prev && prev.teams) || {};
 
   const yms = monthsWindow();
   const jobs = [];
@@ -107,21 +103,7 @@ async function main() {
     }
   });
 
-  let teamsOk = 0;
-  const teamEntries = await mapLimit(LEAGUES, CONCURRENCY, async ({ id }) => {
-    try {
-      const teams = normalizeTeams(await fetchJson(`${ESPN_BASE}/${id}/teams?limit=1000`));
-      if (!teams.length) throw new Error('empty team list');
-      teamsOk++;
-      return [id, { fetchedAt: now, teams }];
-    } catch (e) {
-      failed.push(`${id}|teams (${e.message})`);
-      return prevTeams[id] ? [id, prevTeams[id]] : null;
-    }
-  });
-
   console.log(`fetched ${ok}/${jobs.length}`);
-  console.log(`team lists ${teamsOk}/${LEAGUES.length}`);
   if (failed.length) console.log('failed:\n  ' + failed.join('\n  '));
   if (!ok) {
     console.error('no entry could be fetched; keeping the existing snapshot');
@@ -129,16 +111,15 @@ async function main() {
   }
 
   const months = Object.fromEntries(entries.filter(Boolean));
-  const teams = Object.fromEntries(teamEntries.filter(Boolean));
   const unchanged = prev && prev.generatedAt && now - prev.generatedAt < MAX_AGE_MS
-    && fingerprint(months, teams) === fingerprint(prevMonths, prevTeams);
+    && fingerprint(months) === fingerprint(prevMonths);
   if (unchanged) {
     console.log('unchanged, snapshot not rewritten');
     return;
   }
 
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
-  fs.writeFileSync(OUT, JSON.stringify({ generatedAt: now, months, teams }) + '\n');
+  fs.writeFileSync(OUT, JSON.stringify({ generatedAt: now, months }) + '\n');
   console.log(`wrote ${path.relative(root, OUT)} (${Object.keys(months).length} entries)`);
 }
 

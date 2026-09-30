@@ -24,6 +24,7 @@ jobs:
         with:
           node-version: 22
       - run: node tools/build-snapshot.js
+      - run: node tools/build-teams-snapshot.js
       - name: Commit snapshot
         id: snapshot
         run: |

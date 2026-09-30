@@ -266,7 +266,7 @@ function fetchMonth(leagueId, ym) {
 }
 
 /* ---------- 同源快照（冷启动兜底） ----------
- * snapshot/schedule.json 由 GitHub Actions 定时生成（tools/build-snapshot.js），包含月赛程和球队名单。
+ * snapshot/schedule.json 由 GitHub Actions 定时生成（tools/build-snapshot.js），格式与月缓存一致。
  * 新设备没有任何缓存、浏览器直连 ESPN 又慢或不通时，先用它出数据；写入缓存后照常按 TTL 判过期并联网更新。
  * 成功后会话内复用，手动刷新可重取；file:// 或取不到不影响直连流程。 */
 
@@ -289,8 +289,9 @@ function seedFromSnapshot(opts = {}) {
     })
     .then((snap) => {
       const months = snap && snap.months;
+      if (!months || typeof months !== 'object') return false;
       let seeded = false;
-      for (const key of Object.keys(months && typeof months === 'object' ? months : {})) {
+      for (const key of Object.keys(months)) {
         const [leagueId, ym] = key.split('|');
         const raw = months[key];
         if (!leagueId || !/^\d{6}$/.test(ym || '') || !raw || !Array.isArray(raw.events)
@@ -302,18 +303,6 @@ function seedFromSnapshot(opts = {}) {
         /* 批量写入，最后统一淘汰一次（逐条 pruneCache 会反复解析全部缓存） */
         cacheMemo.set(cacheKey(leagueId, ym), entry);
         try { storage.setItem(cacheKey(leagueId, ym), JSON.stringify(entry)); } catch (e) { /* 配额满：只留内存副本 */ }
-        seeded = true;
-      }
-      const teams = snap && snap.teams;
-      for (const leagueId of Object.keys(teams && typeof teams === 'object' ? teams : {})) {
-        const entry = teams[leagueId];
-        if (!entry || !Number.isFinite(entry.fetchedAt) || entry.fetchedAt <= 0
-          || !Array.isArray(entry.teams) || !entry.teams.length
-          || !entry.teams.every((t) => t && typeof t.id === 'string' && t.id
-            && typeof t.name === 'string' && t.name)) continue;
-        const local = readTeamsCache(leagueId);
-        if (local && local.fetchedAt >= entry.fetchedAt) continue;
-        writeTeamsCache(leagueId, { ...entry, source: 'snapshot' });
         seeded = true;
       }
       if (seeded) pruneCache();
@@ -360,6 +349,40 @@ const TEAMS_PREFIX = 'fs1t|';
 const TEAMS_TTL_MS = 7 * 24 * 3600e3;
 
 const teamsMemo = new Map();
+let teamsSnapshotPromise = null;
+
+/* 名单由本站提供，避免移动网络无法直连 ESPN 时搜索完全不可用。 */
+function seedTeamsFromSnapshot() {
+  if (teamsSnapshotPromise) return teamsSnapshotPromise;
+  if (typeof location !== 'undefined' && location.protocol === 'file:') return Promise.resolve(false);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SNAPSHOT_TIMEOUT_MS);
+  teamsSnapshotPromise = fetch('snapshot/teams.json', { signal: ctrl.signal, cache: 'no-store' })
+    .then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    })
+    .then((snap) => {
+      let valid = false;
+      for (const [id, raw] of Object.entries((snap && snap.leagues) || {})) {
+        if (!raw || !Number.isFinite(raw.fetchedAt) || raw.fetchedAt <= 0
+          || !Array.isArray(raw.teams) || !raw.teams.length
+          || !raw.teams.every((t) => t && typeof t.id === 'string' && t.id
+            && typeof t.name === 'string' && t.name)) continue;
+        valid = true;
+        const local = readTeamsCache(id);
+        if (!local || raw.fetchedAt > local.fetchedAt) writeTeamsCache(id, raw);
+      }
+      return valid;
+    })
+    .catch(() => false)
+    .then((valid) => {
+      if (!valid) teamsSnapshotPromise = null;
+      return valid;
+    })
+    .finally(() => clearTimeout(timer));
+  return teamsSnapshotPromise;
+}
 
 function normalizeTeamEntry(t) {
   if (!t || t.id == null || !t.displayName) return null;
@@ -422,16 +445,16 @@ function fetchTeams(leagueId) {
 
 /* 取某联赛球队名单 → { teams, stale, failed }；缓存新鲜直接用，冷却期不发网络 */
 async function ensureTeams(leagueId, opts = {}) {
-  const isFresh = (data) => !!data && Date.now() - data.fetchedAt < TEAMS_TTL_MS;
   let cached = readTeamsCache(leagueId);
-  if (isFresh(cached) && !opts.force) return { teams: cached.teams, stale: false, failed: false };
-  // 手机搜索先用同源名单；与赛程加载共享同一次快照请求。
-  await seedFromSnapshot();
-  cached = readTeamsCache(leagueId);
-  if (isFresh(cached) && !opts.force) return { teams: cached.teams, stale: false, failed: false };
+  if ((!cached || Date.now() - cached.fetchedAt >= TEAMS_TTL_MS) && !opts.force) {
+    await seedTeamsFromSnapshot();
+    cached = readTeamsCache(leagueId);
+  }
+  const fresh = !!cached && Date.now() - cached.fetchedAt < TEAMS_TTL_MS;
+  if (fresh && !opts.force) return { teams: cached.teams, stale: false, failed: false };
   const fallback = () => {
     const latest = readTeamsCache(leagueId);
-    return { teams: latest ? latest.teams : [], stale: !!latest && !isFresh(latest), failed: !latest };
+    return { teams: latest ? latest.teams : [], stale: !!latest && Date.now() - latest.fetchedAt >= TEAMS_TTL_MS, failed: !latest };
   };
   if (networkCoolingDown() && !opts.force) return fallback();
   try {

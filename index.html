@@ -44,8 +44,8 @@
     <button type="button" class="filter-toggle" id="filterToggle" aria-controls="chips" aria-expanded="false">赛事筛选 <span class="filter-count" id="filterCount"></span></button>
     <div class="secondary-actions">
       <div class="view-seg" role="group" aria-label="视图">
-        <button type="button" class="seg" id="viewDay" aria-pressed="true">日</button>
-        <button type="button" class="seg" id="viewWeek" aria-pressed="false">周</button>
+        <button type="button" class="seg" id="viewDay" aria-label="按日查看" aria-pressed="true">日</button>
+        <button type="button" class="seg" id="viewWeek" aria-label="按周查看" aria-pressed="false">周</button>
       </div>
       <button class="btn today-jump" id="goToday">今天</button>
       <button class="btn refresh" id="refresh">刷新</button>
@@ -67,7 +67,7 @@
 
 <footer class="foot">
   <span id="tz"></span>
-  <span>数据：ESPN 公开接口 · 本地缓存</span>
+  <span>数据来源：ESPN</span>
 </footer>
 
 <script src="config.js?v=20260930-national"></script>
