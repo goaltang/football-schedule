@@ -36,5 +36,4 @@ const LEAGUES = [
 const NATIONAL_LEAGUES = LEAGUES.filter((l) => l.group === 'national').map((l) => l.id);
 const DEFAULT_ENABLED = [...LEAGUES.slice(0, 8).map((l) => l.id), ...NATIONAL_LEAGUES];
 
-
-export { LEAGUES, NATIONAL_LEAGUES, DEFAULT_ENABLED };
+if (typeof module !== 'undefined') module.exports = { LEAGUES, NATIONAL_LEAGUES, DEFAULT_ENABLED };

@@ -1,40 +1,29 @@
 'use strict';
 
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import vm from 'node:vm';
-import { spawnSync } from 'node:child_process';
-import os from 'node:os';
-import { fileURLToPath } from 'node:url';
-import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { tsImport } from 'tsx/esm/api';
-const { Hero } = await tsImport('../src/components/Hero.tsx', import.meta.url);
-const { DateBar } = await tsImport('../src/components/DateBar.tsx', import.meta.url);
-const { LeagueChips, LeagueFilters } = await tsImport('../src/components/LeagueFilters.tsx', import.meta.url);
-const { FollowTeams, SearchResults } = await tsImport('../src/components/FollowManager.tsx', import.meta.url);
-const { DaySchedule, WeekSchedule } = await tsImport('../src/components/ScheduleList.tsx', import.meta.url);
-const { MatchRow } = await tsImport('../src/components/MatchRow.tsx', import.meta.url);
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-// The VM isolates storage, clock and requests. React views are the same components
-// used by the browser; no legacy HTML renderer is kept for the tests.
-const scriptSource = (file) => fs.readFileSync(path.join(root, file), 'utf8')
-  .replace(/^import .*?;\n/gm, '').replace(/^export \{[\s\S]*?\};?\n?/gm, '');
-const dataSource = scriptSource('data.js');
-const appSource = scriptSource('app.js');
+const root = path.join(__dirname, '..');
+const dataSource = fs.readFileSync(path.join(root, 'data.js'), 'utf8');
+const appSource = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 
-test('national competition filters preserve saved club choices', () => {
+test('national competition filters preserve saved club choices and keyboard focus', () => {
   const h = harness([['fs1.enabled', '["eng.1","esp.1"]']], true);
   assert.deepEqual([...h.call('loadEnabled()')], ['eng.1', 'esp.1']);
-  h.call('publish()');
+  h.call('renderChips()');
   assert.match(h.elements['#chips'].innerHTML, /aria-label="俱乐部赛事"/);
   assert.match(h.elements['#chips'].innerHTML, /aria-label="国家队赛事"/);
   assert.match(h.elements['#chips'].innerHTML, /data-league="fifa.friendly" aria-pressed="false"/);
   assert.equal(h.elements['#filterCount'].textContent, `2/${h.call('LEAGUES.length')}`);
-  h.call('state.enabled.add("fifa.friendly"); saveEnabled(); publish()');
+  let restored = false;
+  h.elements['#chips'].contains = () => true;
+  h.context.document.activeElement = { dataset: { league: 'fifa.friendly' } };
+  h.elements['#chips'].querySelectorAll = () => [{ dataset: { league: 'fifa.friendly' }, focus: () => { restored = true; } }];
+  h.call('state.enabled.add("fifa.friendly"); saveEnabled(); renderChips()');
+  assert.equal(restored, true);
   assert.match(h.elements['#chips'].innerHTML, /data-league="fifa.friendly" aria-pressed="true"/);
   assert.deepEqual(JSON.parse(h.storage.getItem('fs1.enabled')), ['eng.1', 'esp.1', 'fifa.friendly']);
 });
@@ -289,11 +278,6 @@ function harness(entries = [], withApp = false) {
         if (!this.listeners.has(type)) this.listeners.set(type, []);
         this.listeners.get(type).push(fn);
       },
-      removeEventListener(type, fn) {
-        const list = this.listeners.get(type) || [];
-        const index = list.indexOf(fn);
-        if (index >= 0) list.splice(index, 1);
-      },
       dispatch(type, event) {
         for (const fn of [...(this.listeners.get(type) || [])]) fn(event);
       },
@@ -308,44 +292,13 @@ function harness(entries = [], withApp = false) {
   }
   const context = vm.createContext(globals);
   if (withApp) {
-    vm.runInContext(scriptSource('config.js'), context);
-    vm.runInContext(scriptSource('team-names.js'), context);
+    vm.runInContext(fs.readFileSync(path.join(root, 'config.js'), 'utf8'), context);
+    vm.runInContext(fs.readFileSync(path.join(root, 'team-names.js'), 'utf8'), context);
   }
   vm.runInContext(dataSource, context, { filename: 'data.js' });
   if (withApp) {
-    for (const file of ['src/domain/format.js', 'src/domain/following.js', 'src/domain/catalog.js', 'src/domain/presentation.js']) vm.runInContext(scriptSource(file), context);
     vm.runInContext(appSource, context, { filename: 'app.js' });
-    const methods = ['getSnapshot', 'gotoDay', 'setView', 'reload', 'toggleLeague', 'toggleFilters', 'toggleFollowPanel', 'toggleFollow', 'unfollowAt', 'setSearchQuery', 'loadCatalog', 'followSearchResult', 'isFollowed', 'matchHasFollowed', 'dayDotState', 'followDisplayName', 'followMetaText', 'followNextText', 'scheduleStatus', 'scheduleNotice'];
-    const api = Object.fromEntries(methods.map((name) => [name, (...args) => {
-      context.__args = args;
-      return vm.runInContext(`${name}(...__args)`, context);
-    }]));
-    const markup = (Component, extra = {}) => renderToStaticMarkup(createElement(Component, { state: api.getSnapshot(), api, ...extra }));
-    const paint = () => {
-      const state = api.getSnapshot();
-      elements['#list'].innerHTML = markup(state.view === 'week' ? WeekSchedule : DaySchedule);
-      elements['#chips'].innerHTML = markup(LeagueChips);
-      elements['#days'].innerHTML = /id="days">([\s\S]*?)<\/div>/.exec(markup(DateBar))[1];
-      elements['#followTeams'].innerHTML = markup(FollowTeams);
-      elements['#followResults'].innerHTML = markup(SearchResults);
-      const filters = markup(LeagueFilters);
-      elements['#refresh'].setAttribute('aria-busy', /id="refresh" aria-busy="([^"]*)"/.exec(filters)[1]);
-      elements['#filterCount'].textContent = `${state.enabled.size}/${vm.runInContext('LEAGUES.length', context)}`;
-      elements['#followCount'].textContent = state.followed.length ? String(state.followed.length) : '';
-      elements['#followToggle'].setAttribute('aria-expanded', String(state.followOpen));
-      if (state.followOpen) elements['#followManager'].removeAttribute('hidden');
-      else elements['#followManager'].setAttribute('hidden', '');
-      const hero = markup(Hero);
-      for (const id of ['heroDate', 'heroWd', 'heroRel', 'heroCount', 'updated']) elements[`#${id}`].textContent = new RegExp(`id="${id}">([^<]*)`).exec(hero)[1];
-    };
-    context.__paint = paint;
-    vm.runInContext('subscribe(__paint)', context);
-    context.matchRow = (match, options = {}) => markup(MatchRow, { match, ...options });
-    paint();
-    vm.runInContext('start(); ++loadSeq', context); // Invalidate the asynchronous boot load.
-    elements['#followTeams'].addEventListener('click', (event) => api.unfollowAt(Number(event.target.closest('[data-follow-idx]').dataset.followIdx)));
-    elements['#followSearch'].addEventListener('input', (event) => api.setSearchQuery(event.target.value));
-    elements['#followResults'].addEventListener('click', (event) => api.followSearchResult(event.target.closest('[data-search-id]').dataset.searchId));
+    vm.runInContext('++loadSeq', context); // invalidate the asynchronous boot load
   }
   return {
     context,
@@ -455,13 +408,13 @@ test('an unavailable day renders retry instead of an empty-fixture claim', () =>
   h.call(`state.data = {
     matches: [], failed: ['eng.1'], fetchedAt: null, fromCache: false,
     stale: true, leagueMeta: new Map(),
-  }; state.loading = false; publish()`);
+  }; state.loading = false; renderList()`);
   assert.match(h.elements['#list'].innerHTML, /赛程待确认/);
   assert.match(h.elements['#list'].innerHTML, /id="retry"/);
   assert.doesNotMatch(h.elements['#list'].innerHTML, /当天暂无所选赛事或关注球队的比赛/);
   assert.notEqual(h.elements['#heroCount'].textContent, '暂无比赛');
 
-  h.call('state.data.failed = []; state.data.stale = false; state.data.fetchedAt = Date.now(); publish()');
+  h.call('state.data.failed = []; state.data.stale = false; state.data.fetchedAt = Date.now(); renderList()');
   assert.match(h.elements['#list'].innerHTML, /当天暂无所选赛事或关注球队的比赛/);
   assert.equal(h.elements['#heroCount'].textContent, '暂无比赛');
 });
@@ -481,7 +434,7 @@ test('legacy followed name resolves by team, survives ID drift, and reads never 
   assert.equal(h.call('isFollowed({ name: "Roma", teamId: "112" })'), false);
   assert.equal(h.call('matchHasFollowed(fixture)'), true);
   assert.deepEqual(h.entries(), snap);
-  h.call('publish()'); // 渲染期间也不得写关注偏好
+  h.call('render()'); // 渲染期间也不得写关注偏好
   assert.deepEqual(h.entries(), snap);
 
   /* 消费端可见：行内星标状态 */
@@ -520,7 +473,7 @@ test('legacy followed name resolves by team, survives ID drift, and reads never 
 
 test('legacy id-only follow survives upgrade with an honest placeholder', () => {
   const h = harness([['fs1.followed', '["id:7777"]'], ['fs1.enabled', '["eng.1"]']], true);
-  h.call('publish()');
+  h.call('render()');
   assert.equal(h.elements['#followCount'].textContent, '1');
   assert.match(h.elements['#followTeams'].innerHTML, /球队名称待补全/);
   /* 未观察过名称的档案只能按 ID 命中 */
@@ -594,7 +547,7 @@ test('follow manager shows each profile next cached fixture only while open', ()
   /* 关注两队：Home 在缓存里有未来比赛（事件 ID 与档案不同 → 必须按名字命中），Roma 没有 */
   h.call("toggleFollow({ name: 'Home', teamId: '42', league: 'eng.1' })");
   h.call("toggleFollow({ name: 'Roma', teamId: '112', league: 'ita.1' })");
-  h.call('publish()');
+  h.call('render()');
   /* 面板收起（index.html 初始态）：不展示下一场 */
   assert.doesNotMatch(h.elements['#followTeams'].innerHTML, /follow-team-next/);
 
@@ -610,7 +563,7 @@ test('follow manager shows each profile next cached fixture only while open', ()
 
   const fetches = h.attempts();
   h.call('toggleFollowPanel()'); // 打开面板
-  h.call('publish()');
+  h.call('render()');
   assert.equal(h.attempts(), fetches); // 只扫本地缓存，零网络
   const html = h.elements['#followTeams'].innerHTML;
   const [mm, dd] = [Number(day.slice(5, 7)), Number(day.slice(8, 10))];
@@ -619,7 +572,7 @@ test('follow manager shows each profile next cached fixture only while open', ()
   assert.match(html, /暂未查到赛程/); // Roma：诚实说明没有已缓存赛程，不承诺真实最近
   /* 收起面板 → 不再展示 */
   h.call('toggleFollowPanel()');
-  h.call('publish()');
+  h.call('render()');
   assert.doesNotMatch(h.elements['#followTeams'].innerHTML, /follow-team-next/);
 
   /* 缓存出现更早的未来比赛 → 重开面板即重算到新的一场 */
@@ -627,12 +580,12 @@ test('follow manager shows each profile next cached fixture only while open', ()
   const sooner = { ...upcoming, id: 'sooner-game', start: new Date(`${day2}T12:00:00`).toISOString() };
   for (const ym of h.call(`monthsForDay('${day2}')`)) seedMonth(h, 'eng.1', ym, [sooner]);
   h.call('toggleFollowPanel()');
-  h.call('publish()');
+  h.call('render()');
   const [m2, d2] = [Number(day2.slice(5, 7)), Number(day2.slice(8, 10))];
   assert.ok(h.elements['#followTeams'].innerHTML.includes(`赛程预览：${m2}/${d2} 12:00 · 英超 · Home vs Away`));
   assert.equal(h.attempts(), fetches); // 全程零网络
   h.call('toggleFollowPanel()');
-  h.call('publish()');
+  h.call('render()');
   assert.doesNotMatch(h.elements['#followTeams'].innerHTML, /follow-team-next/);
 });
 
@@ -691,7 +644,7 @@ test('same ID with different known names stays as two profiles and cancels indep
     { id: '110', name: 'Roma', names: ['roma'], leagues: [] },
   ]);
   const h = harness([['fs1.followed', stored]], true);
-  h.call('publish()');
+  h.call('render()');
   /* 同 ID 但已知名字不同 → 两条档案并存，不被 ID 合并 */
   assert.equal(h.call('state.followed.length'), 2);
   assert.equal(h.elements['#followCount'].textContent, '2');
@@ -803,7 +756,7 @@ test('date strip dots distinguish confirmed-empty from uncached days', () => {
   h.call("state.windowStart = '2026-10-05'; state.dayKey = '2026-10-07';");
   /* 十月缓存已就位且整月无赛 → 7 天全部“确认无赛”，不算未知 */
   seedMonth(h, 'eng.1', '202610', []);
-  h.call('publish()');
+  h.call('renderDays()');
   let html = h.elements['#days'].innerHTML;
   assert.equal((html.match(/day-dot off/g) || []).length, 7);
   assert.equal((html.match(/day-dot unk/g) || []).length, 0);
@@ -811,7 +764,7 @@ test('date strip dots distinguish confirmed-empty from uncached days', () => {
   assert.match(html, /aria-label="2026-10-05 [^"]*无所选赛事比赛"/);
 
   /* 另一个启用联赛没有缓存 → 覆盖不足 → 同一天变“未知” */
-  h.call("state.enabled.add('esp.1'); publish()");
+  h.call("state.enabled.add('esp.1'); renderDays()");
   html = h.elements['#days'].innerHTML;
   assert.equal((html.match(/day-dot unk/g) || []).length, 7);
   assert.match(html, /aria-label="2026-10-05 [^"]*赛程未知"/);
@@ -819,7 +772,7 @@ test('date strip dots distinguish confirmed-empty from uncached days', () => {
 
   /* 缓存过期（赛程可能已变更）→ 同样无赛也不能确认 → unk */
   seedMonth(h, 'eng.1', '202610', [], Date.now() - 2 * 864e5);
-  h.call('publish()');
+  h.call('renderDays()');
   html = h.elements['#days'].innerHTML;
   assert.equal((html.match(/day-dot unk/g) || []).length, 7);
   assert.equal((html.match(/aria-label="2026-10-05 [^"]*赛程未知"/) || []).length, 1);
@@ -839,7 +792,7 @@ test('date strip dots distinguish confirmed-empty from uncached days', () => {
   assert.match(html, /aria-label="2026-10-05 [^"]*无所选赛事比赛"/);
 
   /* 无缓存月份 → 未知，aria-label 明示“赛程未知” */
-  h.call("state.windowStart = '2026-07-05'; state.dayKey = '2026-07-07'; publish()");
+  h.call("state.windowStart = '2026-07-05'; state.dayKey = '2026-07-07'; renderDays()");
   html = h.elements['#days'].innerHTML;
   assert.equal((html.match(/day-dot unk/g) || []).length, 7);
   assert.equal((html.match(/aria-label="2026-07-05 [^"]*赛程未知"/) || []).length, 1);
@@ -853,7 +806,7 @@ test('cross-tab storage event refreshes follows without clobbering other prefs',
     ['fs1.day', '2026-09-22'],
     ['fs1.view', 'day'],
   ], true);
-  h.call('publish()');
+  h.call('render()');
   assert.equal(h.elements['#followCount'].textContent, '1');
 
   /* 另一标签页（独立上下文）取消了该关注：其写入值由真实 app 代码产生 */
@@ -929,7 +882,7 @@ test('week view groups by day, skips empty days, marks followed', async () => {
       { dayKey: '2026-09-23', matches: [fixtures[2]] },
       { dayKey: '2026-09-24', matches: [] },
     ];
-    publish();
+    render();
   })()`);
   const html = h.elements['#list'].innerHTML;
   assert.equal((html.match(/class="wday"/g) || []).length, 2); // 空日跳过
@@ -943,19 +896,19 @@ test('week view groups by day, skips empty days, marks followed', async () => {
 test('week view keeps incomplete days distinct from a confirmed empty week', () => {
   const h = harness([], true);
   h.call(`state.loading = false; state.view = 'week'; state.windowStart = '2026-09-21';
-    state.weekDays = [{ dayKey: '2026-09-22', matches: [], pending: true }]; publish()`);
+    state.weekDays = [{ dayKey: '2026-09-22', matches: [], pending: true }]; render()`);
   let html = h.elements['#list'].innerHTML;
   assert.match(html, /加载中…/);
   assert.doesNotMatch(html, /id="retry"|本周暂无比赛|未能加载/);
 
-  h.call('state.weekDays[0].pending = false; state.weekDays[0].failed = ["eng.1"]; publish()');
+  h.call('state.weekDays[0].pending = false; state.weekDays[0].failed = ["eng.1"]; render()');
   html = h.elements['#list'].innerHTML;
   assert.match(html, /赛程待确认/);
   assert.match(html, /id="retry"/);
   assert.doesNotMatch(html, /本周暂无比赛/);
   assert.equal(h.elements['#heroCount'].textContent, '赛程待确认');
 
-  h.call('state.weekDays[0].failed = []; publish()');
+  h.call('state.weekDays[0].failed = []; render()');
   assert.match(h.elements['#list'].innerHTML, /本周暂无比赛/);
   assert.equal(h.elements['#heroCount'].textContent, '本周暂无比赛');
 });
@@ -966,17 +919,17 @@ test('background updates keep matches visible without warning of a loading failu
   h.call(`state.loading = false; state.data = {
     matches: [fixture], failed: [], fetchedAt: Date.now(), fromCache: true,
     stale: true, pending: true, leagueMeta: new Map(),
-  }; publish()`);
+  }; renderList()`);
   assert.match(h.elements['#list'].innerHTML, /class="match /);
   assert.doesNotMatch(h.elements['#list'].innerHTML, /class="warn"|缓存|未能加载/);
   assert.match(h.elements['#heroCount'].textContent, /更新中…/);
   assert.match(h.elements['#updated'].textContent, /更新于 .*更新中…/);
 
-  h.call('state.data.pending = false; publish()');
+  h.call('state.data.pending = false; renderList()');
   assert.match(h.elements['#list'].innerHTML, /比赛时间和比分可能有变动/);
   assert.match(h.elements['#heroCount'].textContent, /赛程可能有变动/);
 
-  h.call('state.data.failed = ["esp.1"]; publish()');
+  h.call('state.data.failed = ["esp.1"]; renderList()');
   assert.match(h.elements['#list'].innerHTML, /西甲赛程未能加载/);
   assert.match(h.elements['#heroCount'].textContent, /部分赛程未能加载/);
   assert.doesNotMatch(h.elements['#list'].innerHTML, /无法确认当天是否有比赛|esp\.1/);
@@ -989,13 +942,13 @@ test('a partially unavailable week with known matches does not deny those matche
     state.weekDays = [
       { dayKey: '2026-09-22', matches: [fixture], failed: [], fetchedAt: Date.now() },
       { dayKey: '2026-09-23', matches: [], failed: ['esp.1'] },
-    ]; publish()`);
+    ]; render()`);
   assert.match(h.elements['#list'].innerHTML, /部分日期的赛程未能加载/);
   assert.match(h.elements['#list'].innerHTML, /id="retry"/);
   assert.doesNotMatch(h.elements['#list'].innerHTML, /无法确认本周是否有比赛|本周暂无比赛/);
   assert.match(h.elements['#heroCount'].textContent, /1 场.*部分赛程未能加载/);
 
-  h.call(`state.weekDays = null; state.loading = true; publish()`);
+  h.call(`state.weekDays = null; state.loading = true; render()`);
   assert.equal(h.elements['#updated'].textContent, '更新中…');
   assert.match(h.elements['#list'].innerHTML, /role="status"/);
   assert.equal(h.elements['#refresh'].getAttribute('aria-busy'), 'true');
@@ -1003,7 +956,7 @@ test('a partially unavailable week with known matches does not deny those matche
 
 test('load errors show an actionable message without exposing the raw exception', () => {
   const h = harness([], true);
-  h.call(`state.loading = false; state.data = null; state.error = 'HTTP 503 internal-test'; publish()`);
+  h.call(`state.loading = false; state.data = null; state.error = 'HTTP 503 internal-test'; renderList()`);
   assert.match(h.elements['#list'].innerHTML, /暂时无法加载赛程/);
   assert.match(h.elements['#list'].innerHTML, /id="retry"/);
   assert.doesNotMatch(h.elements['#list'].innerHTML, /HTTP|internal-test/);
@@ -1348,12 +1301,12 @@ test('team search works from the same-origin snapshot without contacting ESPN', 
     requests++;
     return { ok: true, json: async () => ({ leagues }) };
   });
-  h.call("setSearchQuery('曼联')");
+  h.call("onSearchInput({ target: { value: '曼联' } })");
   await h.call('catalogPromise');
   assert.equal(requests, 1); // 并发联赛共用一次快照请求
   assert.match(h.elements['#followResults'].innerHTML, /Manchester United/);
   assert.doesNotMatch(h.elements['#followResults'].innerHTML, /无法加载/);
-  h.call("followSearchResult('360')");
+  h.call("onSearchClick({ target: { closest: () => ({ dataset: { searchId: '360' } }) } })");
   assert.equal(h.call('state.followed[0].name'), 'Manchester United');
   assert.equal(h.call('state.followed[0].leagues.length'), Object.keys(leagues).length);
 });
@@ -1376,68 +1329,4 @@ test('team snapshot preserves newer cache, ignores invalid data, and retries fai
   assert.equal(calls, 2);
   assert.equal(h.call("readTeamsCache('eng.1').teams[0].name"), 'Arsenal');
   assert.equal(h.call("readTeamsCache('esp.1')"), null);
-});
-
-test('subscriptions have stable snapshots and teardown removes listeners and invalidates loads', async () => {
-  const h = harness([['fs1.enabled', '["eng.1"]']], true);
-  h.call('let calls = 0; const unsubscribe = subscribe(() => calls++);');
-  assert.equal(h.call('getSnapshot() === getSnapshot()'), true);
-  const before = h.call('getSnapshot()');
-  h.call('toggleFilters()');
-  assert.notEqual(h.call('getSnapshot()'), before);
-  assert.equal(h.call('calls'), 1);
-  h.call('unsubscribe(); toggleFilters()');
-  assert.equal(h.call('calls'), 1);
-  h.call('let resolveLoad; loadDayVisible = () => new Promise((resolve) => { resolveLoad = resolve; }); const pendingLoad = reload(); stop();');
-  h.call('resolveLoad({ dayKey: state.dayKey, matches: [], failed: [], fetchedAt: Date.now(), leagueMeta: new Map() });');
-  await h.call('pendingLoad');
-  assert.equal(h.call('state.data'), null);
-  h.storage.setItem('fs1.enabled', '["esp.1"]');
-  h.fireWindow('storage', { key: 'fs1.enabled' });
-  assert.deepEqual([...h.call('state.enabled')], ['eng.1']);
-  assert.equal(h.context.document.listeners.get('keydown').length, 0);
-});
-
-test('quick date switches never commit the previous requests result', async () => {
-  const h = harness([], true);
-  h.call('const pendingDays = new Map(); loadDayVisible = (key) => new Promise((resolve) => pendingDays.set(key, resolve));');
-  h.call('state.dayKey = "2026-10-01"; const first = reload(); state.dayKey = "2026-10-02"; const second = reload();');
-  h.context.fresh = { dayKey: '2026-10-02', matches: [match('new-day', 'eng.1', 2, '42', 9)], failed: [], fetchedAt: Date.now(), leagueMeta: new Map() };
-  h.context.old = { ...h.context.fresh, dayKey: '2026-10-01', matches: [match('old-day', 'eng.1', 1, '42', 9)] };
-  h.call('pendingDays.get("2026-10-02")(fresh)');
-  await h.call('second');
-  h.call('pendingDays.get("2026-10-01")(old)');
-  await h.call('first');
-  assert.equal(h.call('getSnapshot().data.matches[0].id'), 'new-day');
-  assert.equal(h.call('getSnapshot().dayKey'), '2026-10-02');
-});
-
-test('snapshot CLIs import shared ESM normalizers and publish valid schedule and team files', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'football-snapshot-test-'));
-  try {
-    for (const file of ['config.js', 'data.js', 'package.json']) fs.copyFileSync(path.join(root, file), path.join(directory, file));
-    fs.cpSync(path.join(root, 'tools'), path.join(directory, 'tools'), { recursive: true });
-    const mock = path.join(directory, 'mock-fetch.mjs');
-    fs.writeFileSync(mock, `globalThis.fetch = async (url) => ({ ok: true, json: async () => String(url).includes('/teams') ? {
-      sports: [{ leagues: [{ teams: [{ team: { id: '360', displayName: 'Manchester United', abbreviation: 'MUN' } }] }] }]
-    } : {
-      leagues: [{ logos: [] }], events: [{ id: 'snapshot-fixture', date: new Date().toISOString(),
-        status: { type: { name: 'STATUS_SCHEDULED', state: 'pre' } },
-        competitions: [{ competitors: [{ homeAway: 'home', team: { id: '360', displayName: 'Manchester United' } }, { homeAway: 'away', team: { id: '359', displayName: 'Arsenal' } }] }]
-      }]
-    } });`);
-    for (const file of ['build-snapshot.js', 'build-teams-snapshot.js']) {
-      const result = spawnSync(process.execPath, ['--import', mock, path.join(directory, 'tools', file)], { encoding: 'utf8', timeout: 10000 });
-      assert.equal(result.status, 0, result.stderr || String(result.error));
-    }
-    const { LEAGUES } = await import('../config.js');
-    const schedule = JSON.parse(fs.readFileSync(path.join(directory, 'snapshot/schedule.json'), 'utf8'));
-    assert.equal(Object.keys(schedule.months).length, LEAGUES.length * 4);
-    assert.equal(Object.values(schedule.months)[0].events[0].home.name, 'Manchester United');
-    const teams = JSON.parse(fs.readFileSync(path.join(directory, 'snapshot/teams.json'), 'utf8'));
-    assert.equal(Object.keys(teams.leagues).length, LEAGUES.length);
-    assert.equal(teams.leagues['eng.1'].teams[0].id, '360');
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
 });

@@ -7,12 +7,72 @@
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <title>赛程 · 每日足球</title>
 <link rel="preconnect" href="https://site.api.espn.com">
-<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23007AFF'/%3E%3Ccircle cx='16' cy='16' r='8.5' fill='none' stroke='%23FFFFFF' stroke-width='2'/%3E%3Cpath d='M16 7.5v17M7.5 16h17' stroke='%23FFFFFF' stroke-width='1' opacity='.45'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div id="root"></div>
-<noscript>请启用 JavaScript 查看足球赛程。</noscript>
-<script type="module" src="/src/main.tsx"></script>
+
+<header class="top">
+  <div class="masthead">
+    <h1>赛程</h1>
+    <div class="mast-side">
+      <span class="meta" id="updated"></span>
+    </div>
+  </div>
+
+  <div class="day-hero">
+    <div class="hero-main">
+      <span class="hero-date" id="heroDate"></span>
+      <span class="hero-wd" id="heroWd"></span>
+      <span class="hero-rel" id="heroRel"></span>
+    </div>
+    <span class="hero-count" id="heroCount"></span>
+  </div>
+</header>
+
+<div class="sticky-bar">
+  <div class="datebar">
+    <button class="nav" id="prevDay" aria-label="前一天">‹</button>
+    <div class="days" id="days"></div>
+    <button class="nav" id="nextDay" aria-label="后一天">›</button>
+  </div>
+</div>
+
+<div class="filters">
+  <div class="filter-toolbar">
+    <button type="button" class="filter-toggle" id="filterToggle" aria-controls="chips" aria-expanded="false">赛事筛选 <span class="filter-count" id="filterCount"></span></button>
+    <div class="secondary-actions">
+      <div class="view-seg" role="group" aria-label="视图">
+        <button type="button" class="seg" id="viewDay" aria-label="按日查看" aria-pressed="true">日</button>
+        <button type="button" class="seg" id="viewWeek" aria-label="按周查看" aria-pressed="false">周</button>
+      </div>
+      <button class="btn today-jump" id="goToday">今天</button>
+      <button class="btn refresh" id="refresh">刷新</button>
+      <button type="button" class="btn follow-toggle" id="followToggle" aria-controls="followManager" aria-expanded="false">关注 <span class="follow-count" id="followCount"></span></button>
+    </div>
+  </div>
+  <div class="follow-manager" id="followManager" hidden>
+    <p class="follow-head">我的关注</p>
+    <div class="follow-search">
+      <input type="search" id="followSearch" class="search-input" placeholder="搜索球队：皇马、国足、阿根廷…" aria-label="搜索俱乐部或国家队并关注" aria-controls="followResults" autocomplete="off" spellcheck="false" enterkeyhint="search">
+      <div class="search-results" id="followResults" aria-live="polite"></div>
+    </div>
+    <div class="follow-teams" id="followTeams"></div>
+  </div>
+  <div class="chips" id="chips"></div>
+</div>
+
+<main id="list" class="list"></main>
+
+<footer class="foot">
+  <span id="tz"></span>
+  <span>数据来源：ESPN</span>
+</footer>
+
+<script src="config.js?v=20260930-national"></script>
+<script src="team-names.js?v=20260930-national"></script>
+<script src="data.js?v=20260930-national"></script>
+<script src="app.js?v=20260930-national"></script>
 </body>
 </html>

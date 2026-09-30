@@ -213,5 +213,3 @@ function buildZhIndex() {
 function zhName(englishName) {
   return buildZhIndex().get(normalizeTeamName(englishName)) || englishName;
 }
-
-export { normalizeTeamName, buildZhIndex, zhName, TEAM_ZH, TEAM_SEARCH_ALIASES, ZH_PREFIX, ZH_SUFFIX };

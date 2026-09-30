@@ -1,4 +1,3 @@
-import { fileURLToPath } from 'node:url';
 /* 刷新本地图标库：把各联赛的队徽与联赛标（64px 缩略图）下载到 logos/
  * 用法：node tools/refresh-logos.js [--national]（只刷新国家队赛事）
  * 什么时候跑：新赛季、config.js 增加联赛后、或发现新球队图标缺失时
@@ -6,14 +5,14 @@ import { fileURLToPath } from 'node:url';
  */
 'use strict';
 
-import fs from 'fs';
-import path from 'path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { LEAGUES } from '../config.js';
+const fs = require('fs');
+const path = require('path');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+const { LEAGUES } = require('../config.js');
 
 const execFileP = promisify(execFile);
-const OUT = fileURLToPath(new URL('../logos', import.meta.url));
+const OUT = path.join(__dirname, '..', 'logos');
 
 async function curlBuf(url) {
   const { stdout } = await execFileP(

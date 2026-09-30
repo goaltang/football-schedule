@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-import { fileURLToPath } from 'node:url';
 'use strict';
 
 // 发布完整联赛名单；请求失败保留上一份，不用赛程推断球队所属联赛。
-import fs from 'node:fs';
-import path from 'node:path';
-const root = fileURLToPath(new URL('../', import.meta.url));
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const root = path.join(__dirname, '..');
 const out = path.join(root, 'snapshot', 'teams.json');
-import { LEAGUES } from '../config.js';
-import { ESPN_BASE, normalizeTeams, mapLimit } from '../data.js';
+const { LEAGUES } = require(path.join(root, 'config.js'));
+const ctx = vm.createContext({ window: {}, Intl, AbortController, setTimeout, clearTimeout, fetch, console });
+vm.runInContext(fs.readFileSync(path.join(root, 'data.js'), 'utf8'), ctx);
+const { ESPN_BASE, normalizeTeams, mapLimit } = vm.runInContext('({ ESPN_BASE, normalizeTeams, mapLimit })', ctx);
 
 async function main() {
   let prev = {};

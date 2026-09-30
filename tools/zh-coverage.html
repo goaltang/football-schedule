@@ -19,9 +19,9 @@
 <p id="sum" class="sum">拉取各联赛球队名单中……</p>
 <div id="out"></div>
 
-<script type="module">
-import { LEAGUES } from '../config.js';
-import { zhName } from '../team-names.js';
+<script src="../config.js"></script>
+<script src="../team-names.js"></script>
+<script>
 'use strict';
 async function fetchTeams(lg) {
   let lastErr = null;
