@@ -600,7 +600,7 @@ function dayDotState(dayKey) {
       total += 1;
       const entry = readCache(id, ym);
       /* 过期缓存里的赛程可能已变更（补赛/改期），不能据此确认“无赛” */
-      if (entry && now - (entry.fetchedAt || 0) < monthTtlMs(ym)) fresh += 1;
+      if (entry && now - (entry.fetchedAt || 0) < monthTtlMs(ym, entry)) fresh += 1;
     }
   }
   return total > 0 && fresh === total ? 'off' : 'unk';
@@ -1124,6 +1124,8 @@ async function enrichEmptyDay(seq) {
 async function reload(opts = {}) {
   if (state.view === 'week') return reloadWeek(opts);
   const seq = ++loadSeq;
+  let earlyUpdate = null;
+  let committed = false;
   state.loading = true;
   state.error = null;
   renderList();
@@ -1133,6 +1135,7 @@ async function reload(opts = {}) {
       onUpdate: (fresh) => {
         /* 后台重验完成：静默替换为新数据 */
         if (seq !== loadSeq || state.dayKey !== fresh.dayKey) return;
+        if (!committed) { earlyUpdate = fresh; return; }
         state.data = fresh;
         enrichFollowedFromMatches(fresh.matches);
         invalidateFollowNext();
@@ -1142,8 +1145,9 @@ async function reload(opts = {}) {
       },
     });
     if (seq !== loadSeq) return;
-    state.data = data;
-    enrichFollowedFromMatches(data.matches);
+    state.data = earlyUpdate && !earlyUpdate.pending && data.pending ? earlyUpdate : data;
+    committed = true;
+    enrichFollowedFromMatches(state.data.matches);
     invalidateFollowNext();
     if (!opts.preservePreview) {
       state.nearby = null;
@@ -1151,7 +1155,7 @@ async function reload(opts = {}) {
     }
     state.loading = false;
     render(); /* 先出当日视图：空场面板不等就近搜索 */
-    if (!data.pending && !data.matches.length) await enrichEmptyDay(seq);
+    if (!state.data.pending && !state.data.matches.length) await enrichEmptyDay(seq);
   } catch (e) {
     if (seq !== loadSeq) return;
     state.error = (e && e.message) || '未知错误';
@@ -1199,7 +1203,10 @@ async function reloadWeek(opts = {}) {
       }
     });
     if (seq !== loadSeq) return;
-    state.weekDays = days.map((day) => earlyUpdates.get(day.dayKey) || day);
+    state.weekDays = days.map((day) => {
+      const early = earlyUpdates.get(day.dayKey);
+      return early && !early.pending && day.pending ? early : day;
+    });
     committed = true;
     enrichFollowedFromMatches(days.flatMap((d) => d.matches));
     invalidateFollowNext();
@@ -1555,5 +1562,12 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
   link.rel = 'manifest';
   link.href = 'manifest.webmanifest';
   document.head.appendChild(link);
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  const controlled = !!navigator.serviceWorker.controller;
+  let shellReloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!controlled || shellReloaded) return;
+    shellReloaded = true;
+    location.reload();
+  });
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
 }

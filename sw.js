@@ -3,15 +3,15 @@
  */
 'use strict';
 
-const CACHE = 'football-schedule-shell-v11';
+const CACHE = 'football-schedule-shell-v12';
 const SHELL = [
   './',
   './index.html',
   './styles.css',
-  './config.js',
-  './team-names.js',
-  './data.js',
-  './app.js',
+  './config.js?v=20260930-mobile',
+  './team-names.js?v=20260930-mobile',
+  './data.js?v=20260930-mobile',
+  './app.js?v=20260930-mobile',
   './manifest.webmanifest',
 ];
 
@@ -43,7 +43,7 @@ self.addEventListener('fetch', (e) => {
             const copy = res.clone();
             caches.open(CACHE).then((c) => c.put(req, copy));
           }
-          return res;
+          return res.ok ? res : caches.match(req).then((hit) => hit || res);
         })
         .catch(() => caches.match(req).then((hit) => hit || Response.error()))
     );
@@ -51,17 +51,29 @@ self.addEventListener('fetch', (e) => {
   }
 
   if (sameOrigin) {
-    /* 本地资源（页面/脚本/队徽）：缓存优先，后台更新 */
+    /* 页面和脚本网络优先，避免手机长期运行旧数据逻辑；队徽等资源缓存优先。 */
+    const url = new URL(req.url);
+    const code = req.mode === 'navigate' || /\.(?:html|js|css)$/.test(url.pathname);
     e.respondWith(
       caches.match(req).then((hit) => {
+        let timer;
         const net = fetch(req)
           .then((res) => {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy));
-            return res;
+            if (res.ok) {
+              const copy = res.clone();
+              e.waitUntil(caches.open(CACHE).then((c) => c.put(req, copy)));
+            }
+            return res.ok ? res : hit || res;
           })
-          .catch(() => hit);
-        return hit || net;
+          .catch(() => hit || Response.error())
+          .finally(() => clearTimeout(timer));
+        e.waitUntil(net.then(() => {}));
+        if (!code) return hit || net;
+        if (!hit) return net;
+        // 弱网下至多等 5 秒即回落已缓存应用，网络请求继续更新缓存。
+        return Promise.race([net, new Promise((resolve) => {
+          timer = setTimeout(() => resolve(hit), 5000);
+        })]);
       })
     );
     return;

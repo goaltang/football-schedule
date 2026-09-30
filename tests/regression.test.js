@@ -1073,9 +1073,12 @@ test('cold start renders leagues that already arrived when the deadline hits', a
     competitions: [{ competitors: [
       { homeAway: 'home', team: { id: '1', displayName: 'A' } },
       { homeAway: 'away', team: { id: '2', displayName: 'B' } }] }] };
-  h.setFetch((url) => (String(url).includes('/eng.1/')
-    ? Promise.resolve({ ok: true, json: async () => ({ leagues: [], events: [ev] }) })
-    : new Promise(() => {}))); /* 其余联赛一直无响应 */
+  h.setFetch((url) => {
+    if (String(url).includes('snapshot/')) return Promise.reject(new Error('snapshot unavailable'));
+    return String(url).includes('/eng.1/')
+      ? Promise.resolve({ ok: true, json: async () => ({ leagues: [], events: [ev] }) })
+      : new Promise(() => {}); /* 其余联赛一直无响应 */
+  });
   h.context.updates = [];
   const r = await h.call(`loadDay('${day}', { leagues: ['eng.1', 'esp.1'], deadline: 50, onUpdate: (v) => updates.push(v) })`);
   assert.equal(r.pending, true);
@@ -1099,7 +1102,9 @@ test('cold start with an unreachable ESPN falls back to the same-origin snapshot
   const r = await h.call("loadDay('2026-09-26', { leagues: ['eng.1'], deadline: 20000, onUpdate: (v) => updates.push(v) })");
   assert.equal(r.matches.length, 1);
   assert.equal(r.matches[0].id, 'snap1');
-  assert.equal(r.pending, true); /* 仍在联网核对 */
+  assert.equal(r.pending, undefined); /* 有效快照即可完成首屏，无需等待 ESPN */
+  assert.equal(r.stale, false);
+  assert.equal(h.attempts(), 1); /* 只访问同源快照 */
   assert.ok(r.fetchedAt);
   assert.ok(h.entries().some(([k]) => k === 'fs1|m|eng.1|202609')); /* 已写入本地缓存，下次直接命中 */
 });
@@ -1119,4 +1124,111 @@ test('a snapshot never overwrites a newer local cache and a bad snapshot is igno
   const bad = harness();
   bad.setFetch(async () => ({ ok: true, json: async () => ({ months: 'nope' }) }));
   assert.equal(await bad.call('seedFromSnapshot()'), false);
+});
+
+test('a three-hour-old snapshot confirms an empty day without contacting ESPN', async () => {
+  const h = harness();
+  h.setFetch(async (url) => {
+    assert.ok(String(url).includes('snapshot/'));
+    return { ok: true, json: async () => ({ months: {
+      'eng.1|202609': { fetchedAt: Date.now() - 3 * 3600e3, league: { id: 'eng.1' }, events: [] },
+    } }) };
+  });
+  const day = await h.call("loadDay('2026-09-30', { leagues: ['eng.1'] })");
+  assert.equal(day.matches.length, 0);
+  assert.equal(day.failed.length, 0);
+  assert.equal(day.stale, false);
+  assert.equal(day.pending, undefined);
+  assert.ok(day.fetchedAt);
+  assert.equal(h.attempts(), 1);
+});
+
+test('an ESPN request started before seeding cannot discard the snapshot on failure', async () => {
+  const h = harness();
+  const requests = [];
+  const entry = { fetchedAt: Date.now(), league: { id: 'eng.1' }, events: [match('survives', 'eng.1', 26)] };
+  h.setFetch((url) => String(url).includes('snapshot/')
+    ? Promise.resolve({ ok: true, json: async () => ({ months: { 'eng.1|202609': entry } }) })
+    : new Promise((resolve, reject) => requests.push(reject)));
+  const pending = h.call("ensureMonth('eng.1', '202609', { force: true })");
+  await h.call('seedFromSnapshot()');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    while (requests.length <= attempt) await new Promise(setImmediate);
+    requests[attempt](new Error('mobile ESPN blocked'));
+  }
+  const result = await pending;
+  assert.equal(result.data.events[0].id, 'survives');
+  assert.equal(result.stale, false);
+  assert.equal(result.failed, false);
+});
+
+test('expired and partially covered snapshots never confirm that there are no matches', async () => {
+  for (const age of [7 * 3600e3, 1000]) {
+    const h = harness();
+    h.setFetch(async (url) => {
+      if (!String(url).includes('snapshot/')) throw new Error('mobile ESPN blocked');
+      return { ok: true, json: async () => ({ months: {
+        'eng.1|202609': { fetchedAt: Date.now() - age, league: { id: 'eng.1' }, events: [] },
+      } }) };
+    });
+    const day = await h.call("loadDay('2026-09-30', { leagues: ['eng.1', 'esp.1'] })");
+    assert.ok(day.failed.includes('esp.1'));
+    assert.equal(day.stale, age > 6 * 3600e3);
+    assert.ok(day.fetchedAt);
+  }
+});
+
+test('a failed snapshot request can be retried and force refresh obtains a new snapshot', async () => {
+  const h = harness();
+  let fail = true;
+  h.setFetch(async () => {
+    if (fail) throw new Error('temporary failure');
+    return { ok: true, json: async () => ({ months: {
+      'eng.1|202609': { fetchedAt: Date.now(), league: { id: 'eng.1' }, events: [] },
+    } }) };
+  });
+  assert.equal(await h.call('seedFromSnapshot()'), false);
+  fail = false;
+  assert.equal(await h.call('seedFromSnapshot()'), true);
+  const attempts = h.attempts();
+  await h.call('seedFromSnapshot({ force: true })');
+  assert.equal(h.attempts(), attempts + 1);
+});
+
+test('day view keeps a completed update received before the initial pending result', async () => {
+  const h = harness([], true);
+  h.context.freshMatch = match('fresh-day', 'eng.1', 26);
+  h.call(`state.view = 'day'; state.dayKey = '2026-09-26';
+    loadDayVisible = async (key, opts) => {
+      opts.onUpdate({ dayKey: key, matches: [freshMatch], failed: [], leagueMeta: new Map(), stale: false, fetchedAt: Date.now() });
+      return { dayKey: key, matches: [], failed: [], leagueMeta: new Map(), pending: true };
+    }`);
+  await h.call('reload()');
+  assert.equal(h.call('state.data.matches[0].id'), 'fresh-day');
+  assert.equal(h.call('state.data.pending'), undefined);
+});
+
+test('day view never replaces the completed snapshot result with an early progress update', async () => {
+  const h = harness([], true);
+  h.context.freshMatch = match('complete-day', 'eng.1', 26);
+  h.call(`state.view = 'day'; state.dayKey = '2026-09-26';
+    loadDayVisible = async (key, opts) => {
+      opts.onUpdate({ dayKey: key, matches: [freshMatch], failed: [], leagueMeta: new Map(), pending: true, stale: true });
+      return { dayKey: key, matches: [freshMatch], failed: [], leagueMeta: new Map(), stale: false, fetchedAt: Date.now() };
+    }`);
+  await h.call('reload()');
+  assert.equal(h.call('state.data.stale'), false);
+  assert.equal(h.call('state.data.pending'), undefined);
+});
+
+test('week view keeps completed results instead of early snapshot progress', async () => {
+  const h = harness([], true);
+  h.context.freshMatch = match('complete-week', 'eng.1', 26);
+  h.call(`state.view = 'week'; state.windowStart = '2026-09-21';
+    loadDayVisible = async (key, opts) => {
+      opts.onUpdate({ dayKey: key, matches: [freshMatch], failed: [], pending: true, stale: true });
+      return { dayKey: key, matches: [freshMatch], failed: [], stale: false };
+    }`);
+  await h.call('reloadWeek()');
+  assert.equal(h.call('state.weekDays.every(day => !day.stale && !day.pending)'), true);
 });

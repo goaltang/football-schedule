@@ -141,11 +141,12 @@ function monthDistance(ym) {
   return Math.abs(Number(ym.slice(0, 4)) * 12 + Number(ym.slice(4, 6)) - 1 - cur);
 }
 
-/* 缓存有效期：过去的月份 24 小时（补赛/改期仍会更新），当月与未来 30 分钟 */
-function monthTtlMs(ym) {
+/* 缓存有效期：过去的月份 24 小时；当月/未来直连数据 30 分钟，同源快照 6 小时 */
+function monthTtlMs(ym, data = null) {
   const now = new Date();
   const cur = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
-  return ym < cur ? 24 * 3600e3 : 30 * 60e3;
+  // 同源快照每 3 小时生成，允许一次调度延迟；比分仍由强制直播轮询更新。
+  return ym < cur ? 24 * 3600e3 : data && data.source === 'snapshot' ? 6 * 3600e3 : 30 * 60e3;
 }
 
 /* ---------- 抓取与归一化 ---------- */
@@ -260,18 +261,21 @@ function fetchMonth(leagueId, ym) {
 /* ---------- 同源快照（冷启动兜底） ----------
  * snapshot/schedule.json 由 GitHub Actions 定时生成（tools/build-snapshot.js），格式与月缓存一致。
  * 新设备没有任何缓存、浏览器直连 ESPN 又慢或不通时，先用它出数据；写入缓存后照常按 TTL 判过期并联网更新。
- * 每个页面会话只取一次；file:// 或取不到都视为“没有快照”，不影响原有流程。 */
+ * 成功后会话内复用，手动刷新可重取；file:// 或取不到不影响直连流程。 */
 
 const SNAPSHOT_URL = 'snapshot/schedule.json';
 const SNAPSHOT_TIMEOUT_MS = 10000;
 let snapshotPromise = null;
+let snapshotLoading = false;
 
-function seedFromSnapshot() {
+function seedFromSnapshot(opts = {}) {
+  if (opts.force && !snapshotLoading) snapshotPromise = null;
   if (snapshotPromise) return snapshotPromise;
   if (typeof location !== 'undefined' && location.protocol === 'file:') return (snapshotPromise = Promise.resolve(false));
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), SNAPSHOT_TIMEOUT_MS);
-  snapshotPromise = fetch(SNAPSHOT_URL, { signal: ctrl.signal })
+  snapshotLoading = true;
+  snapshotPromise = fetch(SNAPSHOT_URL, { signal: ctrl.signal, cache: 'no-store' })
     .then((res) => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -282,10 +286,13 @@ function seedFromSnapshot() {
       let seeded = false;
       for (const key of Object.keys(months)) {
         const [leagueId, ym] = key.split('|');
-        const entry = months[key];
-        if (!leagueId || !/^\d{6}$/.test(ym || '') || !entry || !Array.isArray(entry.events)) continue;
+        const raw = months[key];
+        if (!leagueId || !/^\d{6}$/.test(ym || '') || !raw || !Array.isArray(raw.events)
+          || !Number.isFinite(raw.fetchedAt) || raw.fetchedAt <= 0) continue;
+        const entry = { ...raw, source: 'snapshot' };
         const local = readCache(leagueId, ym);
-        if (local && local.fetchedAt >= entry.fetchedAt) continue;
+        if (local && (local.fetchedAt > entry.fetchedAt
+          || (local.fetchedAt === entry.fetchedAt && local.source === 'snapshot'))) continue;
         /* 批量写入，最后统一淘汰一次（逐条 pruneCache 会反复解析全部缓存） */
         cacheMemo.set(cacheKey(leagueId, ym), entry);
         try { storage.setItem(cacheKey(leagueId, ym), JSON.stringify(entry)); } catch (e) { /* 配额满：只留内存副本 */ }
@@ -295,7 +302,12 @@ function seedFromSnapshot() {
       return seeded;
     })
     .catch(() => false)
-    .finally(() => clearTimeout(timer));
+    .then((seeded) => {
+      // 未取得有效快照时允许重试，不把失败固化到整个页面会话。
+      if (!seeded) snapshotPromise = null;
+      return seeded;
+    })
+    .finally(() => { snapshotLoading = false; clearTimeout(timer); });
   return snapshotPromise;
 }
 
@@ -305,7 +317,7 @@ function seedFromSnapshot() {
  */
 async function ensureMonth(leagueId, ym, opts = {}) {
   const cached = readCache(leagueId, ym);
-  const fresh = !!cached && Date.now() - cached.fetchedAt < monthTtlMs(ym);
+  const fresh = !!cached && Date.now() - cached.fetchedAt < monthTtlMs(ym, cached);
   if (fresh && !opts.force) return { data: cached, fromCache: true, stale: false };
   /* 冷却期或只读模式：不发网络（force 可穿透冷却） */
   if (opts.cacheOnly || (networkCoolingDown() && !opts.force)) {
@@ -314,7 +326,11 @@ async function ensureMonth(leagueId, ym, opts = {}) {
   try {
     return await fetchMonth(leagueId, ym);
   } catch (e) {
-    return { data: cached, fromCache: !!cached, stale: !!cached, failed: !cached };
+    // 请求期间快照/其他请求可能已写入缓存，失败时必须回读最新数据。
+    const fallback = readCache(leagueId, ym);
+    const snapshotFresh = fallback && fallback.source === 'snapshot'
+      && Date.now() - fallback.fetchedAt < monthTtlMs(ym, fallback);
+    return { data: fallback, fromCache: !!fallback, stale: !!fallback && !snapshotFresh, failed: !fallback };
   }
 }
 
@@ -479,7 +495,12 @@ async function loadDay(dayKey, opts = {}) {
   const needsNetwork = opts.force || instant.stale || !instant.fetchedAt;
   if (!needsNetwork) return instant;
 
-  const refresh = (onProgress) => collectView(dayKey, jobs, { force: opts.force, onProgress });
+  const refresh = async (onProgress) => {
+    // 先走与页面同源的快照。微信内置浏览器无需先连接 ESPN 即可取得完整赛程。
+    await seedFromSnapshot({ force: opts.force });
+    if (onProgress) onProgress();
+    return collectView(dayKey, jobs, { force: opts.force, onProgress });
+  };
   if (instant.fetchedAt && !opts.force) {
     refresh()
       .then((fresh) => { if (opts.onUpdate) opts.onUpdate(fresh); })
@@ -487,7 +508,7 @@ async function loadDay(dayKey, opts = {}) {
     return { ...instant, failed: [], pending: true };
   }
 
-  /* 无缓存：限时等待。联赛逐个到达、或同源快照就绪时，都立刻用当前缓存出一版“更新中”视图；
+  /* 无缓存：限时等待。联赛逐个到达时，立刻用当前缓存出一版“更新中”视图；
      全部完成则直接返回最新；超时则先返回已有内容，抓取继续在后台完成 */
   const deadline = opts.deadline ?? 25e3;
   let latest = null;
@@ -500,13 +521,12 @@ async function loadDay(dayKey, opts = {}) {
     return v;
   };
   const pending = refresh(() => { publish(); }).then((v) => { finished = true; return v; });
-  const never = new Promise(() => {});
-  const snapReady = opts.force ? never : seedFromSnapshot().then((ok) => (ok ? publish() : null));
+  let deadlineTimer;
   const first = await Promise.race([
     pending.then((v) => ({ v, done: true })),
-    snapReady.then((v) => (v ? { v, done: false } : never)),
-    new Promise((resolve) => setTimeout(() => resolve(null), deadline)),
+    new Promise((resolve) => { deadlineTimer = setTimeout(() => resolve(null), deadline); }),
   ]);
+  clearTimeout(deadlineTimer);
   if (first && first.done) return first.v;
   pending
     .then((fresh) => { if (opts.onUpdate) opts.onUpdate(fresh); })
