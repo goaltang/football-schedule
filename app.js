@@ -249,7 +249,8 @@ function loadEnabled() {
   try {
     const raw = localStorage.getItem(LS_ENABLED);
     const ids = raw ? JSON.parse(raw) : null;
-    return new Set(Array.isArray(ids) && ids.length ? ids : DEFAULT_ENABLED);
+    const valid = Array.isArray(ids) ? ids.filter((id) => LEAGUES.some((league) => league.id === id)) : [];
+    return new Set(valid.length ? valid : DEFAULT_ENABLED);
   } catch (e) {
     return new Set(DEFAULT_ENABLED);
   }
@@ -726,14 +727,21 @@ function subscribe(listener) {
   return () => listeners.delete(listener);
 }
 function getSnapshot() { return snapshot; }
-function toggleLeague(id) {
-  if (!LEAGUES.some((lg) => lg.id === id)) return;
-  if (state.enabled.has(id)) state.enabled.delete(id);
-  else state.enabled.add(id);
-  if (!state.enabled.size) state.enabled.add(id);
+function setLeagues(ids) {
+  const next = new Set(ids.filter((id) => LEAGUES.some((league) => league.id === id)));
+  // Batch choices save and reload once. Empty or unchanged choices do nothing.
+  if (!next.size || (next.size === state.enabled.size && [...next].every((id) => state.enabled.has(id)))) return;
+  state.enabled = next;
   saveEnabled();
   publish();
   reload();
+}
+function toggleLeague(id) {
+  if (!LEAGUES.some((lg) => lg.id === id)) return;
+  const next = new Set(state.enabled);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  setLeagues([...next]);
 }
 function toggleFilters() { state.filtersOpen = !state.filtersOpen; publish(); }
 function setSearchQuery(query) {
@@ -791,7 +799,7 @@ function stop() {
 }
 loadPrefs();
 publish();
-export { subscribe, getSnapshot, start, stop, gotoDay, setView, setOnlyFollowed, reload, toggleLeague, toggleFilters,
+export { subscribe, getSnapshot, start, stop, gotoDay, setView, setOnlyFollowed, reload, toggleLeague, setLeagues, toggleFilters,
   toggleFollow, unfollowAt, toggleFollowPanel, setSearchQuery, loadCatalog, followSearchResult,
   isFollowed, matchHasFollowed, dayDotState, followDisplayName, followMetaText, followNextText,
   scheduleStatus, scheduleNotice, UI_TEXT, STATUS_LABEL, DAY_DOT_TEXT, STRIP_LEN };
