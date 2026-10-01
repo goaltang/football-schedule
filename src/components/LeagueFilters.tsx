@@ -108,7 +108,11 @@ export function LeagueFilters(props: ViewProps) {
           <ScheduleScope {...props} />
         </div>
         <div className="schedule-actions">
-          <button className={`btn today-jump${state.dayKey !== dayKeyOf(new Date(state.now)) ? ' off' : ''}`} id="goToday" onClick={() => api.gotoDay(dayKeyOf(new Date()), { resetWeek: true })}>今天</button>
+          <div className="quick-dates" role="group" aria-label="快捷日期">
+            <button className={`btn today-jump${state.view === 'tonight' || state.dayKey !== dayKeyOf(new Date(state.now)) ? ' off' : ''}`} id="goToday" onClick={() => api.gotoDay(dayKeyOf(new Date()), { resetWeek: true })}>今天</button>
+            <button type="button" className={`btn tonight-jump${state.view === 'tonight' ? ' on' : ''}`} id="goTonight"
+              aria-pressed={state.view === 'tonight'} aria-controls="list" onClick={() => api.setView('tonight')}>今晚</button>
+          </div>
           <button className={`btn refresh${state.loading ? ' busy' : ''}`} id="refresh" aria-busy={state.loading} onClick={() => api.reload({ force: true })}>刷新</button>
           <button type="button" className="btn follow-toggle" id="followToggle" aria-controls="followManager" aria-expanded={state.followOpen} onClick={api.toggleFollowPanel}>关注 <span className="follow-count" id="followCount">{state.followed.length || ''}</span></button>
         </div>

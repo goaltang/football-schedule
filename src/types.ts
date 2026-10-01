@@ -34,12 +34,13 @@ export interface CatalogEntry { id: string; name: string; zh: string; logo: stri
 export interface Snapshot {
   dayKey: string;
   windowStart: string;
-  view: 'day' | 'week';
+  view: 'day' | 'week' | 'tonight';
   onlyFollowed: boolean;
   enabled: Set<string>;
   followed: FollowRecord[];
   data: DayData | null;
   weekDays: (DayData & { dayKey: string })[] | null;
+  tonightDays: (DayData & { dayKey: string })[] | null;
   nearby: { prev?: NearbyDay; next?: NearbyDay } | null;
   preview: { dayKey: string; kind: string; count: number; matches: Match[]; partial: boolean } | null;
   loading: boolean;
@@ -56,7 +57,7 @@ export interface AppApi {
   getSnapshot: () => Snapshot;
   start: () => () => void;
   gotoDay: (key: string, options?: { resetWeek?: boolean }) => void;
-  setView: (view: 'day' | 'week') => void;
+  setView: (view: 'day' | 'week' | 'tonight') => void;
   setOnlyFollowed: (onlyFollowed: boolean) => void;
   reload: (options?: { force?: boolean }) => unknown;
   toggleLeague: (id: string) => void;

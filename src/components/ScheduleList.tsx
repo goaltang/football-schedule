@@ -1,5 +1,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import { LEAGUES } from '../../config.js';
+import { dayKeyOf } from '../../data.js';
+import { tonightRange } from '../domain/tonight.js';
 import type { NearbyDay, ViewProps } from '../types';
 import { fmtDayLabel, weekdayOf, relativeLabel } from '../domain/format.js';
 import { monthDay, weekSummary, uiText } from './Hero';
@@ -66,6 +68,35 @@ export function WeekSchedule(props: ViewProps) {
     : status !== 'ready' && status !== 'updating' ? <div className="panel"><p>{summary?.matches.length ? (status === 'stale' ? '比赛时间和比分可能有变动。' : state.error ? '暂时无法更新这7天的赛程。' : '部分日期的赛程未能加载。') : uiText.unconfirmed}</p><p className="sub">{summary?.matches.length ? '可重新加载查看最新赛程。' : '暂时无法确认这7天是否有比赛，请稍后重新加载。'}</p><Retry api={api} /></div>
       : !summary?.matches.length ? <div className="panel"><p>{state.onlyFollowed ? '这7天暂无关注球队的比赛' : uiText.emptyWeek}</p><p className="sub">{state.onlyFollowed ? '可切换日期，或查看全部比赛。' : '可切换日期或调整赛事筛选。'}</p></div> : null}</>;
 }
+export function TonightSchedule(props: ViewProps) {
+  const { state, api } = props;
+  const data = state.data;
+  if (state.onlyFollowed && !state.followed.length) return <NoFollowedTeams {...props} />;
+  if (state.loading && !data) return <Skeleton />;
+  if (state.error && !data?.matches.length) return <LoadError api={api} />;
+  if (!data) return null;
+  const status = api.scheduleStatus(data, state.error, state.loading);
+  const notice = api.scheduleNotice(data);
+  if (data.matches.length) return <>
+    {notice && <div className="warn" role="status">{notice} <Retry api={api} /></div>}
+    {tonightRange(state.dayKey).dayKeys.map((key, index) => {
+      const matches = data.matches.filter((match) => dayKeyOf(new Date(match.start)) === key);
+      if (!matches.length) return null;
+      const followed = matches.filter(api.matchHasFollowed).length;
+      return <section className="wday" key={key} aria-label={`${fmtDayLabel(key)}${index ? '凌晨' : '晚间'}比赛`}>
+        <h3 className="wday-head"><b>{monthDay(key)}</b> {weekdayOf(key)} · {index ? '次日凌晨' : '晚间'} · {matches.length} 场{followed ? <> · <i className="fav">关注 {followed}</i></> : null}</h3>
+        {matches.map((match) => <MatchRow {...props} match={match} key={match.id} compact copy="tonight" />)}
+      </section>;
+    })}
+  </>;
+  if (status === 'updating') return <div className="panel" role="status"><p>{uiText.loading}</p></div>;
+  const uncertain = status !== 'ready' || !data.fetchedAt;
+  return <div className={`panel${uncertain ? '' : ' empty'}`}>
+    <p>{uncertain ? uiText.unconfirmed : state.onlyFollowed ? '今晚暂无关注球队的比赛' : '今晚暂无所选赛事或关注球队的比赛'}</p>
+    <p className="sub">{uncertain ? '暂时无法确认今晚是否有比赛，请稍后重新加载。' : state.onlyFollowed ? '可查看7天赛程，或切换到全部比赛。' : '可查看今天的其他比赛，或调整赛事筛选。'}</p>
+    {uncertain ? <Retry api={api} /> : <button className="btn" onClick={() => state.onlyFollowed ? api.setView('week') : api.gotoDay(dayKeyOf(new Date(state.now)))}>{state.onlyFollowed ? '查看7天赛程' : '查看今天比赛'}</button>}
+  </div>;
+}
 export function ScheduleList(props: ViewProps) {
   const host = useRef<HTMLElement>(null);
   const focused = useRef<HTMLButtonElement | null>(null);
@@ -84,5 +115,5 @@ export function ScheduleList(props: ViewProps) {
   });
   return <main id="list" className="list" ref={host} onFocusCapture={(event) => {
     if (event.target instanceof HTMLButtonElement) focused.current = event.target;
-  }}>{props.state.view === 'week' ? <WeekSchedule {...props} /> : <DaySchedule {...props} />}</main>;
+  }}>{props.state.view === 'tonight' ? <TonightSchedule {...props} /> : props.state.view === 'week' ? <WeekSchedule {...props} /> : <DaySchedule {...props} />}</main>;
 }

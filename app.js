@@ -5,6 +5,7 @@ import { CACHE_PREFIX, storage, dayKeyOf, parseDayKey, addDays, cachedDayMatches
 import { UNKNOWN_TEAM_NAME, nameKeys, teamSideId, recordNames, recordNamed, recordMatches, mkFollowRecord, storedToRecord, unionRecord, recordNamesOverlap, mergeRecordList, migrateFollowed } from './src/domain/following.js';
 import { searchKey, buildCatalog, searchScore, searchTeams } from './src/domain/catalog.js';
 import { fmtTime, fmtDayLabel, fmtClock, weekdayOf, periodLabel, relativeLabel, countdownText, teamName, leagueZh } from './src/domain/format.js';
+import { tonightDayKey, tonightRange, summarizeTonight } from './src/domain/tonight.js';
 
 /* 页面控制器：偏好、加载、订阅、轮询。DOM 由 React 组件管理。 */
 'use strict';
@@ -38,6 +39,7 @@ const state = {
   followed: [],
   data: null,
   weekDays: null,
+  tonightDays: null,
   nearby: null,
   preview: null,
   loading: false,
@@ -269,7 +271,8 @@ function loadPrefs() {
   state.dayKey = savedDay && /^\d{4}-\d{2}-\d{2}$/.test(savedDay) ? savedDay : today;
   // 回访时若上次停留在很远的日期，回到今天
   if (Math.abs(parseDayKey(state.dayKey) - parseDayKey(today)) > 2 * 864e5) state.dayKey = today;
-  state.view = (() => { try { return localStorage.getItem(LS_VIEW) === 'week' ? 'week' : 'day'; } catch (e) { return 'day'; } })();
+  state.view = (() => { try { const saved = localStorage.getItem(LS_VIEW); return ['week', 'tonight'].includes(saved) ? saved : 'day'; } catch (e) { return 'day'; } })();
+  if (state.view === 'tonight') state.dayKey = tonightDayKey();
   if (state.view === 'week' && state.dayKey < today) state.dayKey = today;
   state.onlyFollowed = loadOnlyFollowed();
   state.windowStart = state.view === 'week' ? state.dayKey : addDays(state.dayKey, -3);
@@ -307,6 +310,7 @@ function onStorageEvent(e) {
   if (enabledChanged || scopeChanged) {
     state.data = null;
     state.weekDays = null;
+    state.tonightDays = null;
     reload();
     return;
   }
@@ -315,7 +319,7 @@ function onStorageEvent(e) {
     return;
   }
   /* 关注变化：空日预览可能要重算；有比赛的日期发布已覆盖 */
-  if (state.data && !state.data.matches.length && !state.loading) enrichEmptyDay(loadSeq);
+  if (state.view === 'day' && state.data && !state.data.matches.length && !state.loading) enrichEmptyDay(loadSeq);
 }
 
 /* ---------- 日期与比赛状态 ---------- */
@@ -372,6 +376,7 @@ function refreshIfKickoffPassed() {
 
 function minuteTick() {
   invalidateFollowNext();
+  if (syncTonight()) { reload(); return; }
   publish();
   refreshIfKickoffPassed();
 }
@@ -484,6 +489,7 @@ async function enrichEmptyDay(seq) {
 }
 
 async function reload(opts = {}) {
+  syncTonight();
   if (state.onlyFollowed && !state.followed.length) {
     ++loadSeq;
     clearTimeout(liveTimer);
@@ -495,6 +501,7 @@ async function reload(opts = {}) {
     return;
   }
   if (state.view === 'week') return reloadWeek(opts);
+  if (state.view === 'tonight') return reloadRange('tonight', opts);
   const seq = ++loadSeq;
   let earlyUpdate = null;
   let committed = false;
@@ -540,15 +547,19 @@ async function reload(opts = {}) {
   schedulePrefetch();
 }
 
-/* 周视图加载：并行取窗口内 7 天（数据层“联赛×月”缓存共享），单天失败不影响整周 */
-async function reloadWeek(opts = {}) {
+/* 跨日视图共享加载：月缓存共享，单天失败保留其他日期的比赛。 */
+function reloadWeek(opts = {}) { return reloadRange('week', opts); }
+
+async function reloadRange(view, opts = {}) {
   const seq = ++loadSeq;
+  const field = view === 'tonight' ? 'tonightDays' : 'weekDays';
   const earlyUpdates = new Map();
   let committed = false;
   state.loading = true;
   state.error = null;
   publish();
-  const keys = Array.from({ length: STRIP_LEN }, (_, i) => addDays(state.windowStart, i));
+  const keys = view === 'tonight' ? tonightRange(state.dayKey).dayKeys
+    : Array.from({ length: STRIP_LEN }, (_, i) => addDays(state.windowStart, i));
   try {
     const days = await mapLimit(keys, 3, async (key) => {
       try {
@@ -556,15 +567,15 @@ async function reloadWeek(opts = {}) {
           force: opts.force,
           onUpdate: (fresh) => {
             /* 后台重验完成：把该天替换为新数据 */
-            if (seq !== loadSeq || state.view !== 'week') return;
+            if (seq !== loadSeq || state.view !== view) return;
             const updated = { dayKey: key, matches: fresh.matches, failed: fresh.failed, stale: fresh.stale, pending: fresh.pending, fetchedAt: fresh.fetchedAt };
             if (!committed) {
               earlyUpdates.set(key, updated);
               return;
             }
-            const i = state.weekDays.findIndex((x) => x.dayKey === key);
+            const i = state[field].findIndex((x) => x.dayKey === key);
             if (i < 0) return;
-            state.weekDays[i] = updated;
+            state[field][i] = updated;
             enrichFollowedFromMatches(fresh.matches);
             invalidateFollowNext();
             publish();
@@ -577,7 +588,7 @@ async function reloadWeek(opts = {}) {
       }
     });
     if (seq !== loadSeq) return;
-    state.weekDays = days.map((day) => {
+    state[field] = days.map((day) => {
       const early = earlyUpdates.get(day.dayKey);
       return early && !early.pending && day.pending ? early : day;
     });
@@ -599,6 +610,7 @@ async function reloadWeek(opts = {}) {
 }
 
 function currentMatches() {
+  if (state.view === 'tonight') return displayedDay(summarizeTonight(state.tonightDays, state.dayKey))?.matches || [];
   return state.view === 'week'
     ? (state.weekDays || []).flatMap((d) => displayedDay(d).matches)
     : displayedDay(state.data)?.matches || [];
@@ -653,6 +665,10 @@ function schedulePrefetch() {
 }
 
 function gotoDay(dayKey, opts = {}) {
+  if (state.view === 'tonight') {
+    state.view = 'day';
+    saveView();
+  }
   const prevStart = state.windowStart;
   state.dayKey = dayKey;
   const end = addDays(state.windowStart, STRIP_LEN - 1);
@@ -675,19 +691,38 @@ function gotoDay(dayKey, opts = {}) {
 }
 
 function setView(view) {
-  if (state.view === view) return;
+  if (!['day', 'week', 'tonight'].includes(view)) return;
+  if (view !== 'tonight' && state.view === view) return;
+  if (view === 'tonight') {
+    const day = tonightDayKey();
+    if (state.view === view && state.dayKey === day) return;
+    state.dayKey = day;
+    saveDay();
+  }
   state.view = view;
   state.windowStart = view === 'week' ? state.dayKey : addDays(state.dayKey, -3);
   saveView();
-  if (view === 'week') {
+  if (view !== 'day') {
     state.nearby = null;
     state.preview = null;
-    state.weekDays = null;
+    if (view === 'week') state.weekDays = null;
+    else state.tonightDays = null;
   } else {
     state.data = null;
   }
   publish();
   reload();
+}
+
+function syncTonight() {
+  if (state.view !== 'tonight') return false;
+  const day = tonightDayKey();
+  if (state.dayKey === day) return false;
+  state.dayKey = day;
+  state.windowStart = addDays(day, -3);
+  state.tonightDays = null;
+  saveDay();
+  return true;
 }
 
 function setOnlyFollowed(onlyFollowed) {
@@ -716,7 +751,7 @@ function publish() {
     ...state,
     enabled: new Set(state.enabled),
     followed: state.followed.map((rec) => ({ ...rec, names: [...rec.names], leagues: [...rec.leagues] })),
-    data: displayedDay(state.data),
+    data: displayedDay(state.view === 'tonight' ? summarizeTonight(state.tonightDays, state.dayKey) : state.data),
     weekDays: state.weekDays ? state.weekDays.map(displayedDay) : null,
     preview,
     search: { ...search },
@@ -758,10 +793,12 @@ function followSearchResult(id) {
 }
 function onVisibilityChange() {
   if (document.hidden) clearTimeout(liveTimer);
+  else if (syncTonight()) reload();
   else if (currentMatches().some((m) => m.live) || kickoffPassed()) reload({ force: true });
 }
 function onOnline() {
-  const d = state.data;
+  if (syncTonight()) { reload(); return; }
+  const d = state.view === 'tonight' ? summarizeTonight(state.tonightDays, state.dayKey) : state.data;
   if (!state.loading && (state.error || !d || !d.fetchedAt || d.pending || d.failed.length)) reload({ force: true });
 }
 function onKeyDown(e) {
