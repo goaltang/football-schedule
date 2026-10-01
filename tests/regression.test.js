@@ -11,11 +11,12 @@ import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { tsImport } from 'tsx/esm/api';
+import { tonightDayKey, tonightRange, summarizeTonight } from '../src/domain/tonight.js';
 const { Hero } = await tsImport('../src/components/Hero.tsx', import.meta.url);
 const { DateBar } = await tsImport('../src/components/DateBar.tsx', import.meta.url);
 const { LeagueChips, LeagueFilters } = await tsImport('../src/components/LeagueFilters.tsx', import.meta.url);
 const { FollowTeams, SearchResults } = await tsImport('../src/components/FollowManager.tsx', import.meta.url);
-const { DaySchedule, WeekSchedule } = await tsImport('../src/components/ScheduleList.tsx', import.meta.url);
+const { DaySchedule, WeekSchedule, TonightSchedule } = await tsImport('../src/components/ScheduleList.tsx', import.meta.url);
 const { MatchRow } = await tsImport('../src/components/MatchRow.tsx', import.meta.url);
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -25,6 +26,145 @@ const scriptSource = (file) => fs.readFileSync(path.join(root, file), 'utf8')
   .replace(/^import .*?;\n/gm, '').replace(/^export \{[\s\S]*?\};?\n?/gm, '');
 const dataSource = scriptSource('data.js');
 const appSource = scriptSource('app.js');
+
+test('tonight uses local calendar boundaries across months, years and leap days', () => {
+  for (const [day, next] of [['2026-09-30', '2026-10-01'], ['2026-12-31', '2027-01-01'], ['2028-02-29', '2028-03-01']]) {
+    const range = tonightRange(day);
+    assert.deepEqual(range.dayKeys, [day, next]);
+    assert.equal(range.start, new Date(`${day}T18:00:00`).getTime());
+    assert.equal(range.end, new Date(`${next}T06:00:00`).getTime());
+    assert.equal(tonightDayKey(new Date(`${next}T00:00:00`).getTime()), day);
+    assert.equal(tonightDayKey(new Date(`${next}T05:59:59`).getTime()), day);
+    assert.equal(tonightDayKey(new Date(`${next}T06:00:00`).getTime()), next);
+  }
+});
+
+test('tonight includes 18:00, excludes 06:00, orders and deduplicates cross-day matches', () => {
+  const fixture = (id, start) => ({ id, start });
+  const evening = fixture('evening', '2026-09-30T18:00:00');
+  const midnight = fixture('midnight', '2026-10-01T00:00:00');
+  const dawn = fixture('dawn', '2026-10-01T05:59:59');
+  const summary = summarizeTonight([
+    { matches: [midnight, evening, fixture('too-early', '2026-09-30T17:59:59')], fetchedAt: 100 },
+    { matches: [dawn, midnight, fixture('too-late', '2026-10-01T06:00:00'), fixture('invalid', 'unknown')], fetchedAt: 200 },
+  ], '2026-09-30');
+  assert.deepEqual(summary.matches.map((match) => match.id), ['evening', 'midnight', 'dawn']);
+  assert.equal(summary.fetchedAt, 200);
+  assert.equal(summarizeTonight(null, '2026-09-30'), null);
+});
+
+test('tonight retains uncertainty and known matches when one date fails or is still updating', () => {
+  const summary = summarizeTonight([
+    { matches: [{ id: 'known', start: '2026-09-30T20:00:00' }], failed: ['eng.1'], fetchedAt: 100 },
+    { matches: [], failed: ['eng.1', 'esp.1'], error: true, stale: true, pending: true },
+  ], '2026-09-30');
+  assert.equal(summary.matches.length, 1);
+  assert.deepEqual(summary.failed, ['eng.1', 'esp.1']);
+  for (const flag of ['error', 'stale', 'pending']) assert.equal(summary[flag], true);
+});
+
+test('tonight loads both dates and keeps a completed early update before the initial result', async () => {
+  const h = harness([], true);
+  h.context.evening = { ...match('evening', 'eng.1', 30), start: '2026-09-30T18:00:00' };
+  h.context.midnight = { ...match('midnight', 'eng.1', 1), start: '2026-10-01T00:30:00', live: true, status: 'LIVE', fetchedAt: Date.now() };
+  h.call(`state.view = 'tonight'; state.dayKey = '2026-09-30'; state.windowStart = '2026-09-27';
+    const requestedNights = []; const nightUpdates = new Map();
+    loadDayVisible = async (key, opts) => {
+      requestedNights.push(key); nightUpdates.set(key, opts.onUpdate);
+      const matches = key === '2026-09-30' ? [evening] : [midnight];
+      opts.onUpdate({ dayKey: key, matches, failed: [], pending: false, fetchedAt: Date.now() });
+      return { dayKey: key, matches: [], failed: [], pending: true, fetchedAt: Date.now() };
+    }; let nightPolls = 0; scheduleLivePoll = () => { nightPolls++; }`);
+  await h.call("reloadRange('tonight')");
+  assert.deepEqual([...h.call('requestedNights')].sort(), ['2026-09-30', '2026-10-01']);
+  assert.deepEqual([...h.call('getSnapshot().data.matches.map((m) => m.id)')], ['evening', 'midnight']);
+  assert.equal(h.call('getSnapshot().data.pending'), false);
+  assert.equal(h.elements['#heroDate'].textContent, '今晚');
+  assert.equal(h.elements['#heroWd'].textContent, '18:00–次日06:00');
+  assert.match(h.elements['#list'].innerHTML, /09\.30.*晚间/);
+  assert.match(h.elements['#list'].innerHTML, /10\.01.*次日凌晨/);
+  assert.equal(h.call('currentMatches().length'), 2);
+  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  h.call(`nightUpdates.get('2026-10-01')({ dayKey: '2026-10-01', matches: [], failed: ['eng.1'], fetchedAt: Date.now() })`);
+  assert.equal(h.call('getSnapshot().data.matches.length'), 1);
+  assert.match(h.elements['#list'].innerHTML, /英超赛程未能加载/);
+  assert.equal(h.call('nightPolls'), 2);
+  h.call(`reload = () => {}; gotoDay('2026-10-01');
+    nightUpdates.get('2026-10-01')({ dayKey: '2026-10-01', matches: [midnight], failed: [], fetchedAt: Date.now() })`);
+  assert.equal(h.call('getSnapshot().view'), 'day');
+  assert.equal(h.call('getSnapshot().data'), null);
+  assert.equal(h.storage.getItem('fs1.view'), 'day');
+});
+
+test('tonight renders followed matches once and ignores live matches outside the night window', () => {
+  const h = harness([['fs1.followed', '["manchesterunited","arsenal"]']], true);
+  h.context.included = { ...match('followed', 'eng.1', 30), start: '2026-09-30T20:00:00',
+    home: { name: 'Manchester United', teamId: '360' }, away: { name: 'Arsenal', teamId: '359' } };
+  h.context.excluded = { ...match('outside-live', 'eng.1', 30), start: '2026-09-30T12:00:00', live: true, status: 'LIVE' };
+  h.call(`state.view = 'tonight'; state.dayKey = '2026-09-30'; state.loading = false;
+    state.tonightDays = [{ matches: [excluded, included], failed: [], fetchedAt: Date.now() },
+      { matches: [], failed: [], fetchedAt: Date.now() }]; publish()`);
+  assert.equal((h.elements['#list'].innerHTML.match(/class="match /g) || []).length, 1);
+  assert.equal(h.elements['#heroCount'].textContent, '1 场 · 关注 1 场');
+  assert.doesNotMatch(h.hero(), /比分.*自动/);
+  assert.equal(h.call('currentMatches().some(m => m.live)'), false);
+  h.call('reload = () => {}; setOnlyFollowed(true)');
+  assert.equal(h.elements['#heroCount'].textContent, '1 场 · 关注球队');
+  h.call('state.tonightDays[0].matches = [excluded]; publish()');
+  assert.match(h.elements['#list'].innerHTML, /今晚暂无关注球队的比赛/);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /赛程预览/);
+  h.call('state.tonightDays[1].failed = ["eng.1"]; publish()');
+  assert.match(h.elements['#list'].innerHTML, /暂时无法确认今晚是否有比赛/);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /今晚暂无关注/);
+});
+
+test('tonight restores the current night, survives midnight and moves forward at 06:00', () => {
+  const h = harness([['fs1.view', 'tonight'], ['fs1.day', '2026-01-01']], true);
+  h.advance(new Date('2026-09-30T23:59:00').getTime() - Date.now());
+  h.call(`loadPrefs(); reload = () => { nightReloads++; }; let nightReloads = 0; state.tonightDays = []`);
+  assert.equal(h.call('state.dayKey'), '2026-09-30');
+  h.advance(2 * 60e3);
+  h.call('minuteTick()');
+  assert.equal(h.call('state.dayKey'), '2026-09-30');
+  assert.equal(h.call('nightReloads'), 0);
+  h.advance(6 * 3600e3);
+  h.call('minuteTick()');
+  assert.equal(h.call('state.dayKey'), '2026-10-01');
+  assert.equal(h.call('state.tonightDays'), null);
+  assert.equal(h.call('nightReloads'), 1);
+  assert.equal(h.storage.getItem('fs1.day'), '2026-10-01');
+  h.advance(24 * 3600e3);
+  h.call("setView('tonight')");
+  assert.equal(h.call('state.dayKey'), '2026-10-02');
+  assert.equal(h.call('nightReloads'), 2);
+});
+
+test('reconnecting in tonight retries its missing coverage even when the previously selected day was fresh', () => {
+  const h = harness([], true);
+  h.advance(new Date('2026-09-30T19:00:00').getTime() - Date.now());
+  h.call(`state.view = 'tonight'; state.dayKey = '2026-09-30'; state.loading = false;
+    state.data = { matches: [], failed: [], fetchedAt: Date.now() };
+    state.tonightDays = [{ matches: [], failed: ['eng.1'] }, { matches: [], failed: [], fetchedAt: Date.now() }];
+    let reconnects = 0; reload = () => { reconnects++; }; onOnline()`);
+  assert.equal(h.call('reconnects'), 1);
+  h.call('state.tonightDays[0].failed = []; state.tonightDays[0].fetchedAt = Date.now(); onOnline()');
+  assert.equal(h.call('reconnects'), 1);
+});
+
+test('loading an unrelated night date does not claim that a fresh live score is being updated', () => {
+  const h = harness([], true);
+  h.advance(new Date('2026-09-30T19:00:00').getTime() - Date.now());
+  h.context.fixture = { ...match('evening-live', 'eng.1', 30), start: '2026-09-30T18:30:00',
+    live: true, status: 'LIVE', fetchedAt: h.call('Date.now()') };
+  h.context.outside = { ...h.context.fixture, id: 'outside-live', start: '2026-10-01T14:00:00' };
+  h.call(`state.view = 'tonight'; state.dayKey = '2026-09-30'; state.loading = false;
+    state.tonightDays = [{ dayKey: '2026-09-30', matches: [fixture], failed: [], fetchedAt: Date.now() },
+      { dayKey: '2026-10-01', matches: [outside], pending: true, failed: [] }]; publish()`);
+  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  assert.doesNotMatch(h.hero(), /正在更新比分/);
+  h.call('state.tonightDays[0].pending = true; publish()');
+  assert.match(h.hero(), /正在更新比分/);
+});
 
 test('national competition filters preserve saved club choices', () => {
   const h = harness([['fs1.enabled', '["eng.1","esp.1"]']], true);
@@ -341,7 +481,7 @@ function harness(entries = [], withApp = false) {
   }
   vm.runInContext(dataSource, context, { filename: 'data.js' });
   if (withApp) {
-    for (const file of ['src/domain/format.js', 'src/domain/following.js', 'src/domain/catalog.js', 'src/domain/presentation.js']) vm.runInContext(scriptSource(file), context);
+    for (const file of ['src/domain/format.js', 'src/domain/following.js', 'src/domain/catalog.js', 'src/domain/presentation.js', 'src/domain/tonight.js']) vm.runInContext(scriptSource(file), context);
     vm.runInContext(appSource, context, { filename: 'app.js' });
     const methods = ['getSnapshot', 'gotoDay', 'setView', 'setOnlyFollowed', 'reload', 'toggleLeague', 'setLeagues', 'toggleFilters', 'toggleFollowPanel', 'toggleFollow', 'unfollowAt', 'setSearchQuery', 'loadCatalog', 'followSearchResult', 'isFollowed', 'matchHasFollowed', 'dayDotState', 'followDisplayName', 'followMetaText', 'followNextText', 'scheduleStatus', 'scheduleNotice'];
     const api = Object.fromEntries(methods.map((name) => [name, (...args) => {
@@ -352,7 +492,7 @@ function harness(entries = [], withApp = false) {
     heroMarkup = () => markup(Hero);
     const paint = () => {
       const state = api.getSnapshot();
-      elements['#list'].innerHTML = markup(state.view === 'week' ? WeekSchedule : DaySchedule);
+      elements['#list'].innerHTML = markup(state.view === 'tonight' ? TonightSchedule : state.view === 'week' ? WeekSchedule : DaySchedule);
       elements['#chips'].innerHTML = markup(LeagueChips);
       elements['#days'].innerHTML = /id="days">([\s\S]*?)<\/div>/.exec(markup(DateBar))[1];
       elements['#followTeams'].innerHTML = markup(FollowTeams);
