@@ -15,7 +15,7 @@ const UI_TEXT = {
   stale: '赛程可能有变动',
   unconfirmed: '赛程待确认',
   emptyDay: '暂无比赛',
-  emptyWeek: '本周暂无比赛',
+  emptyWeek: '这7天暂无比赛',
   retry: '重新加载',
 };
 
