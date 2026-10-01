@@ -41,7 +41,11 @@ export function FollowTeams({ state, api }: ViewProps) {
 export function FollowManager(props: ViewProps) {
   const { state, api } = props;
   const host = useRef<HTMLDivElement>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
   const focused = useRef<HTMLButtonElement | null>(null);
+  useLayoutEffect(() => {
+    if (state.followOpen) searchInput.current?.focus();
+  }, [state.followOpen]);
   useLayoutEffect(() => {
     const previous = focused.current;
     if (!previous || previous.isConnected || document.activeElement !== document.body) return;
@@ -52,7 +56,7 @@ export function FollowManager(props: ViewProps) {
   });
   return <div className="follow-manager" id="followManager" hidden={!state.followOpen}>
     <p className="follow-head">我的关注</p><div className="follow-search">
-      <input type="search" id="followSearch" className="search-input" placeholder="搜索球队：皇马、国足、阿根廷…" aria-label="搜索俱乐部或国家队并关注" aria-controls="followResults" autoComplete="off" spellCheck={false} enterKeyHint="search"
+      <input ref={searchInput} type="search" id="followSearch" className="search-input" placeholder="搜索球队：皇马、国足、阿根廷…" aria-label="搜索俱乐部或国家队并关注" aria-controls="followResults" autoComplete="off" spellCheck={false} enterKeyHint="search"
         value={state.search.query} onChange={(event) => api.setSearchQuery(event.target.value)} onFocus={() => api.loadCatalog()} />
       <div className="search-results" id="followResults" aria-live="polite"><SearchResults {...props} /></div>
     </div><div className="follow-teams" id="followTeams" ref={host} onFocusCapture={(event) => {

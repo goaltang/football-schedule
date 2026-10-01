@@ -16,11 +16,12 @@ export function Hero({ state, api }: ViewProps) {
   const count = data?.matches.length || 0;
   const followed = data?.matches.filter(api.matchHasFollowed).length || 0;
   const range = `${monthDay(state.windowStart)}–${monthDay(addDays(state.windowStart, 6))}`;
-  const total = count ? `${weekly ? range + ' · ' : ''}${count} 场${followed ? ` · 关注 ${followed} 场` : ''}${badge ? ' · ' + badge : ''}`
+  const total = state.onlyFollowed && !state.followed.length ? '尚未关注球队'
+    : count ? `${count} 场${followed && !state.onlyFollowed ? ` · 关注 ${followed} 场` : ''}${state.onlyFollowed ? ' · 关注球队' : ''}${badge ? ' · ' + badge : ''}`
     : state.loading || data?.pending ? uiText.loading : state.error ? uiText.unavailable
-      : !data || (!weekly && !data.fetchedAt) || status !== 'ready' ? uiText.unconfirmed : weekly ? uiText.emptyWeek : uiText.emptyDay;
+      : !data || (!weekly && !data.fetchedAt) || status !== 'ready' ? uiText.unconfirmed : state.onlyFollowed ? '暂无关注球队比赛' : weekly ? uiText.emptyWeek : uiText.emptyDay;
   const relative = relativeLabel(state.dayKey);
   return <header className="top"><div className="masthead"><h1>赛程</h1><div className="mast-side"><span className="meta" id="updated">{[data?.fetchedAt ? `更新于 ${fmtClock(data.fetchedAt)}` : '', state.loading || data?.pending ? uiText.updating : ''].filter(Boolean).join(' · ')}</span></div></div>
-    <div className="day-hero"><div className="hero-main"><span className="hero-date" id="heroDate">{monthDay(weekly ? state.windowStart : state.dayKey)}</span><span className="hero-wd" id="heroWd">{weekly ? '整周' : weekdayOf(state.dayKey)}</span><span className="hero-rel" id="heroRel">{weekly || relative === weekdayOf(state.dayKey) ? '' : relative}</span></div><span className="hero-count" id="heroCount">{total}</span></div>
+    <div className="day-hero"><div className="hero-main"><span className="hero-date" id="heroDate">{weekly ? range : monthDay(state.dayKey)}</span><span className="hero-wd" id="heroWd">{weekly ? '7天' : weekdayOf(state.dayKey)}</span><span className="hero-rel" id="heroRel">{weekly || relative === weekdayOf(state.dayKey) ? '' : relative}</span></div><span className="hero-count" id="heroCount">{total}</span></div>
   </header>;
 }

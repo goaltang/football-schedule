@@ -315,7 +315,7 @@ function harness(entries = [], withApp = false) {
   if (withApp) {
     for (const file of ['src/domain/format.js', 'src/domain/following.js', 'src/domain/catalog.js', 'src/domain/presentation.js']) vm.runInContext(scriptSource(file), context);
     vm.runInContext(appSource, context, { filename: 'app.js' });
-    const methods = ['getSnapshot', 'gotoDay', 'setView', 'reload', 'toggleLeague', 'toggleFilters', 'toggleFollowPanel', 'toggleFollow', 'unfollowAt', 'setSearchQuery', 'loadCatalog', 'followSearchResult', 'isFollowed', 'matchHasFollowed', 'dayDotState', 'followDisplayName', 'followMetaText', 'followNextText', 'scheduleStatus', 'scheduleNotice'];
+    const methods = ['getSnapshot', 'gotoDay', 'setView', 'setOnlyFollowed', 'reload', 'toggleLeague', 'toggleFilters', 'toggleFollowPanel', 'toggleFollow', 'unfollowAt', 'setSearchQuery', 'loadCatalog', 'followSearchResult', 'isFollowed', 'matchHasFollowed', 'dayDotState', 'followDisplayName', 'followMetaText', 'followNextText', 'scheduleStatus', 'scheduleNotice'];
     const api = Object.fromEntries(methods.map((name) => [name, (...args) => {
       context.__args = args;
       return vm.runInContext(`${name}(...__args)`, context);
@@ -329,6 +329,7 @@ function harness(entries = [], withApp = false) {
       elements['#followTeams'].innerHTML = markup(FollowTeams);
       elements['#followResults'].innerHTML = markup(SearchResults);
       const filters = markup(LeagueFilters);
+      elements['.filters'].innerHTML = filters;
       elements['#refresh'].setAttribute('aria-busy', /id="refresh" aria-busy="([^"]*)"/.exec(filters)[1]);
       elements['#filterCount'].textContent = `${state.enabled.size}/${vm.runInContext('LEAGUES.length', context)}`;
       elements['#followCount'].textContent = state.followed.length ? String(state.followed.length) : '';
@@ -946,18 +947,18 @@ test('week view keeps incomplete days distinct from a confirmed empty week', () 
     state.weekDays = [{ dayKey: '2026-09-22', matches: [], pending: true }]; publish()`);
   let html = h.elements['#list'].innerHTML;
   assert.match(html, /加载中…/);
-  assert.doesNotMatch(html, /id="retry"|本周暂无比赛|未能加载/);
+  assert.doesNotMatch(html, /id="retry"|这7天暂无比赛|未能加载/);
 
   h.call('state.weekDays[0].pending = false; state.weekDays[0].failed = ["eng.1"]; publish()');
   html = h.elements['#list'].innerHTML;
   assert.match(html, /赛程待确认/);
   assert.match(html, /id="retry"/);
-  assert.doesNotMatch(html, /本周暂无比赛/);
+  assert.doesNotMatch(html, /这7天暂无比赛/);
   assert.equal(h.elements['#heroCount'].textContent, '赛程待确认');
 
   h.call('state.weekDays[0].failed = []; publish()');
-  assert.match(h.elements['#list'].innerHTML, /本周暂无比赛/);
-  assert.equal(h.elements['#heroCount'].textContent, '本周暂无比赛');
+  assert.match(h.elements['#list'].innerHTML, /这7天暂无比赛/);
+  assert.equal(h.elements['#heroCount'].textContent, '这7天暂无比赛');
 });
 
 test('background updates keep matches visible without warning of a loading failure', () => {
@@ -992,7 +993,7 @@ test('a partially unavailable week with known matches does not deny those matche
     ]; publish()`);
   assert.match(h.elements['#list'].innerHTML, /部分日期的赛程未能加载/);
   assert.match(h.elements['#list'].innerHTML, /id="retry"/);
-  assert.doesNotMatch(h.elements['#list'].innerHTML, /无法确认本周是否有比赛|本周暂无比赛/);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /无法确认这7天是否有比赛|这7天暂无比赛/);
   assert.match(h.elements['#heroCount'].textContent, /1 场.*部分赛程未能加载/);
 
   h.call(`state.weekDays = null; state.loading = true; publish()`);
@@ -1267,13 +1268,15 @@ test('an ESPN request started before seeding cannot discard the snapshot on fail
 test('expired and partially covered snapshots never confirm that there are no matches', async () => {
   for (const age of [7 * 3600e3, 1000]) {
     const h = harness();
+    const currentDay = h.call('dayKeyOf(new Date())');
+    const months = Object.fromEntries(h.call(`monthsForDay('${currentDay}')`).map((ym) => [
+      `eng.1|${ym}`, { fetchedAt: Date.now() - age, league: { id: 'eng.1' }, events: [] },
+    ]));
     h.setFetch(async (url) => {
       if (!String(url).includes('snapshot/')) throw new Error('mobile ESPN blocked');
-      return { ok: true, json: async () => ({ months: {
-        'eng.1|202609': { fetchedAt: Date.now() - age, league: { id: 'eng.1' }, events: [] },
-      } }) };
+      return { ok: true, json: async () => ({ months }) };
     });
-    const day = await h.call("loadDay('2026-09-30', { leagues: ['eng.1', 'esp.1'] })");
+    const day = await h.call(`loadDay('${currentDay}', { leagues: ['eng.1', 'esp.1'] })`);
     assert.ok(day.failed.includes('esp.1'));
     assert.equal(day.stale, age > 6 * 3600e3);
     assert.ok(day.fetchedAt);
@@ -1440,4 +1443,226 @@ test('snapshot CLIs import shared ESM normalizers and publish valid schedule and
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('follow-only day view filters and orders matches without duplicates or discarding loaded data', () => {
+  const h = harness([['fs1.followed', '["manchesterunited"]']], true);
+  h.context.fixtures = [
+    { ...match('later', 'eng.1', 30), start: '2026-09-30T22:00:00+08:00', home: { name: 'Manchester United', teamId: '360' } },
+    { ...match('other', 'eng.1', 30), home: { name: 'Liverpool', teamId: '364' } },
+    { ...match('earlier', 'esp.1', 30), start: '2026-09-30T20:00:00+08:00', away: { name: 'Manchester United', teamId: '360' } },
+  ];
+  h.call(`reload = () => {}; state.loading = false;
+    state.data = { matches: fixtures, failed: [], fetchedAt: Date.now(), leagueMeta: new Map() };
+    setOnlyFollowed(true)`);
+  assert.deepEqual([...h.call('getSnapshot().data.matches.map((m) => m.id)')], ['earlier', 'later']);
+  assert.equal(h.call('state.data.matches.length'), 3);
+  assert.equal((h.elements['#list'].innerHTML.match(/class="match /g) || []).length, 2);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /利物浦/);
+  assert.equal(h.elements['#heroCount'].textContent, '2 场 · 关注球队');
+  assert.equal(h.storage.getItem('fs1.onlyFollowed'), 'true');
+  assert.equal(h.call('currentMatches().length'), 2);
+  h.call('setOnlyFollowed(false)');
+  assert.equal(h.call('getSnapshot().data.matches.length'), 3);
+  assert.match(h.elements['#list'].innerHTML, /利物浦/);
+});
+
+test('follow-only preference and seven-day view restore while legacy preferences remain compatible', () => {
+  const day = futureDayKey(1);
+  const h = harness([
+    ['fs1.onlyFollowed', 'true'], ['fs1.view', 'week'], ['fs1.day', day],
+    ['fs1.enabled', '["esp.1"]'], ['fs1.followed', '["arsenal"]'],
+  ], true);
+  assert.equal(h.call('getSnapshot().onlyFollowed'), true);
+  assert.equal(h.call('state.windowStart'), day);
+  assert.equal(h.call('state.view'), 'week');
+  assert.deepEqual([...h.call('state.enabled')], ['esp.1']);
+  assert.equal(h.call('isFollowed({ name: "Arsenal" })'), true);
+  assert.match(h.elements['.filters'].innerHTML, /id="onlyFollowed" aria-pressed="true"/);
+  for (const entries of [[], [['fs1.onlyFollowed', 'invalid']]]) {
+    assert.equal(harness(entries, true).call('state.onlyFollowed'), false);
+  }
+  const returning = harness([['fs1.view', 'week'], ['fs1.day', futureDayKey(-1)]], true);
+  assert.equal(returning.call('state.windowStart'), futureDayKey(0));
+});
+
+test('seven-day loading starts at the selected date and includes the sixth following day across a month boundary', async () => {
+  const h = harness([], true);
+  h.call(`reload = () => {}; state.dayKey = '2026-09-30'; setView('week');
+    const requestedDays = [];
+    loadDayVisible = async (key) => {
+      requestedDays.push(key);
+      return { matches: [], failed: [], fetchedAt: Date.now(), stale: false };
+    }`);
+  await h.call('reloadWeek()');
+  assert.deepEqual([...h.call('requestedDays')].sort(), ['2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06']);
+  assert.equal(h.elements['#heroDate'].textContent, '09.30–10.06');
+  assert.match(h.elements['#days'].innerHTML, /data-day="2026-10-06"/);
+  h.call(`gotoDay('2026-10-02')`);
+  assert.equal(h.call('state.windowStart'), '2026-09-30');
+  h.call(`gotoDay('2026-10-07')`);
+  assert.equal(h.call('state.windowStart'), '2026-10-07');
+  assert.equal(h.call('state.weekDays'), null);
+  h.call(`gotoDay('2026-10-08', { resetWeek: true })`);
+  assert.equal(h.call('state.windowStart'), '2026-10-08');
+  h.call(`setView('day')`);
+  assert.equal(h.call('state.windowStart'), '2026-10-05');
+  h.call(`state.view = 'week'; state.windowStart = addDays(dayKeyOf(new Date()), -2);
+    onKeyDown({ key: 'Home', preventDefault() {} })`);
+  assert.equal(h.call('state.windowStart'), futureDayKey(0));
+});
+
+test('follow-only week shows both followed sides once and omits days containing only other teams', () => {
+  const h = harness([['fs1.followed', '["manchesterunited","arsenal"]']], true);
+  h.context.fixtures = [
+    { ...match('both', 'eng.1', 30), home: { name: 'Manchester United', teamId: '360' }, away: { name: 'Arsenal', teamId: '359' } },
+    { ...match('other', 'eng.1', 1, '88', 9), home: { name: 'Liverpool', teamId: '364' } },
+    { ...match('last', 'eng.1', 6, '360', 9), home: { name: 'Manchester United', teamId: '360' } },
+  ];
+  h.call(`state.onlyFollowed = true; state.view = 'week'; state.loading = false; state.windowStart = '2026-09-30';
+    state.weekDays = [
+      { dayKey: '2026-09-30', matches: [fixtures[0]], fetchedAt: Date.now() },
+      { dayKey: '2026-10-01', matches: [fixtures[1]], fetchedAt: Date.now() },
+      { dayKey: '2026-10-06', matches: [fixtures[2]], fetchedAt: Date.now() },
+    ]; publish()`);
+  assert.equal((h.elements['#list'].innerHTML.match(/class="match /g) || []).length, 2);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /wday-2026-10-01|利物浦/);
+  assert.match(h.elements['#list'].innerHTML, /wday-2026-10-06/);
+  assert.equal(h.call('currentMatches().length'), 2);
+  assert.equal(h.elements['#heroCount'].textContent, '2 场 · 关注球队');
+});
+
+test('follow-only loads disabled followed competitions while preserving the selected competition range', async () => {
+  const h = harness([
+    ['fs1.enabled', '["eng.1"]'], ['fs1.onlyFollowed', 'true'],
+    ['fs1.followed', JSON.stringify([{ name: 'Real Madrid', leagues: ['esp.1'] }])],
+  ], true);
+  const day = futureDayKey(2);
+  const fixture = { ...match('madrid', 'esp.1', 1), start: new Date(`${day}T20:00:00`).toISOString(), home: { name: 'Real Madrid', teamId: '86' } };
+  for (const league of h.call('fetchLeagues()')) for (const ym of h.call(`monthsForDay('${day}')`)) {
+    seedMonth(h, league, ym, league === 'esp.1' ? [fixture] : []);
+  }
+  h.call(`state.dayKey = '${day}'`);
+  await h.call('reload()');
+  assert.deepEqual([...h.call('fetchLeagues()')], ['eng.1', 'esp.1']);
+  assert.equal(h.call('getSnapshot().data.matches[0].id'), 'madrid');
+  assert.equal(h.call('getSnapshot().data.failed.length'), 0);
+  assert.match(h.elements['#list'].innerHTML, /皇家马德里/);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /赛程待确认|未能加载/);
+  const legacy = harness([['fs1.enabled', '["eng.1"]'], ['fs1.onlyFollowed', 'true'], ['fs1.followed', '["arsenal"]']], true);
+  assert.deepEqual([...legacy.call('fetchLeagues()')], ['eng.1']);
+});
+
+test('follow-only with no teams gives actionable guidance and makes no schedule requests', async () => {
+  const h = harness([['fs1.onlyFollowed', 'true']], true);
+  await h.call('reload()');
+  assert.equal(h.attempts(), 0);
+  assert.equal(h.elements['#heroCount'].textContent, '尚未关注球队');
+  assert.match(h.elements['#list'].innerHTML, /还没有关注球队|添加关注球队|查看全部比赛/);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /赛程待确认|加载中|重新加载/);
+  h.call(`setView('week')`);
+  assert.match(h.elements['#list'].innerHTML, /还没有关注球队/);
+  assert.equal(h.attempts(), 0);
+});
+
+test('follow-only keeps an uncertain empty week distinct from confirmed no followed matches', () => {
+  const h = harness([['fs1.followed', '["arsenal"]'], ['fs1.onlyFollowed', 'true']], true);
+  h.call(`state.view = 'week'; state.loading = false;
+    state.weekDays = [{ dayKey: state.dayKey, matches: [], fetchedAt: Date.now(), failed: ['eng.1'] }]; publish()`);
+  assert.match(h.elements['#list'].innerHTML, /赛程待确认|重新加载/);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /这7天暂无关注球队的比赛/);
+  h.call(`state.weekDays[0].failed = []; publish()`);
+  assert.match(h.elements['#list'].innerHTML, /这7天暂无关注球队的比赛/);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /重新加载/);
+});
+
+test('follow-only empty-day previews never fall back to unrelated teams', async () => {
+  const h = harness([['fs1.followed', '["arsenal"]'], ['fs1.onlyFollowed', 'true']], true);
+  h.call(`findNearbyMatchdays = async () => ({ next: { dayKey: '2026-10-02', count: 1 } });
+    let previewRequests = 0; loadDay = async () => { previewRequests++; return { matches: [] }; }`);
+  await h.call('enrichEmptyDay(loadSeq)');
+  assert.equal(h.call('state.preview'), null);
+  assert.equal(h.call('state.nearby.next'), undefined);
+  assert.equal(h.call('previewRequests'), 0);
+});
+
+test('follow-only date dots ignore other teams and require coverage of all queried competitions', () => {
+  const h = harness([
+    ['fs1.onlyFollowed', 'true'], ['fs1.enabled', '["eng.1"]'],
+    ['fs1.followed', JSON.stringify([{ name: 'Real Madrid', leagues: ['esp.1'] }])],
+  ], true);
+  const day = futureDayKey(2);
+  const other = { ...match('other', 'esp.1', 1), start: new Date(`${day}T12:00:00`).toISOString(), home: { name: 'Barcelona' } };
+  for (const ym of h.call(`monthsForDay('${day}')`)) seedMonth(h, 'eng.1', ym, []);
+  for (const ym of h.call(`monthsForDay('${day}')`)) seedMonth(h, 'esp.1', ym, [other]);
+  assert.equal(h.call(`dayDotState('${day}')`), 'off');
+  const followed = { ...other, id: 'followed', home: { name: 'Real Madrid' } };
+  for (const ym of h.call(`monthsForDay('${day}')`)) seedMonth(h, 'esp.1', ym, [followed]);
+  assert.equal(h.call(`dayDotState('${day}')`), 'fill');
+  for (const ym of h.call(`monthsForDay('${day}')`)) seedMonth(h, 'esp.1', ym, [], Date.now() - 25 * 3600e3);
+  assert.equal(h.call(`dayDotState('${day}')`), 'unk');
+});
+
+test('scope and club follow changes sync across tabs without overwriting the selected date or view', () => {
+  const h = harness([['fs1.enabled', '["eng.1"]'], ['fs1.followed', '["arsenal"]']], true);
+  h.call(`let reloadCalls = 0; reload = () => { reloadCalls++; }; state.dayKey = '2026-10-02'; state.view = 'week'`);
+  h.storage.setItem('fs1.onlyFollowed', 'true');
+  h.storage.setItem('fs1.day', '2026-10-03');
+  h.storage.setItem('fs1.view', 'day');
+  h.fireWindow('storage', { key: 'fs1.onlyFollowed' });
+  assert.equal(h.call('state.onlyFollowed'), true);
+  assert.equal(h.call('reloadCalls'), 1);
+  const storedFollows = JSON.stringify([{ name: 'Real Madrid', leagues: ['esp.1'] }]);
+  h.storage.setItem('fs1.followed', storedFollows);
+  h.fireWindow('storage', { key: 'fs1.followed' });
+  assert.equal(h.call('reloadCalls'), 2);
+  assert.deepEqual([...h.call('fetchLeagues()')], ['eng.1', 'esp.1']);
+  assert.equal(h.call('state.dayKey'), '2026-10-02');
+  assert.equal(h.call('state.view'), 'week');
+  assert.equal(h.storage.getItem('fs1.day'), '2026-10-03');
+  assert.equal(h.storage.getItem('fs1.view'), 'day');
+  assert.equal(h.storage.getItem('fs1.followed'), storedFollows);
+});
+
+test('removing the last followed team immediately clears its matches and cancels a pending load', async () => {
+  const h = harness([['fs1.followed', '["arsenal"]'], ['fs1.onlyFollowed', 'true']], true);
+  h.context.fixture = { ...match('arsenal', 'eng.1', 1), home: { name: 'Arsenal', teamId: '359' } };
+  h.call(`state.data = { matches: [fixture], failed: [], fetchedAt: Date.now() }; state.loading = false; publish();
+    let resolvePending; loadDayVisible = () => new Promise((resolve) => { resolvePending = resolve; });
+    const pending = reload(); toggleFollow({ name: 'Arsenal', teamId: '359' })`);
+  assert.equal(h.call('getSnapshot().data.matches.length'), 0);
+  assert.match(h.elements['#list'].innerHTML, /还没有关注球队/);
+  assert.equal(h.call('state.loading'), false);
+  h.call(`resolvePending({ matches: [fixture], failed: [], fetchedAt: Date.now() })`);
+  await h.call('pending');
+  assert.match(h.elements['#list'].innerHTML, /还没有关注球队/);
+  assert.equal(h.call('getSnapshot().data.matches.length'), 0);
+});
+
+test('a follow learned from a domestic match still finds its selected cup fixtures', async () => {
+  const h = harness([
+    ['fs1.onlyFollowed', 'true'], ['fs1.enabled', '["eng.1","uefa.champions"]'],
+    ['fs1.followed', JSON.stringify([{ name: 'Manchester United', leagues: ['eng.1'] }])],
+  ], true);
+  const day = futureDayKey(2);
+  const cup = { ...match('cup', 'uefa.champions', 1), start: new Date(`${day}T20:00:00`).toISOString(), home: { name: 'Manchester United', teamId: '360' } };
+  for (const league of ['eng.1', 'uefa.champions']) for (const ym of h.call(`monthsForDay('${day}')`)) {
+    seedMonth(h, league, ym, league === 'uefa.champions' ? [cup] : []);
+  }
+  const data = await h.call(`loadDayVisible('${day}')`);
+  assert.equal(data.matches[0]?.id, 'cup');
+});
+
+test('removing one follow also removes its retained empty-day preview immediately', () => {
+  const h = harness([['fs1.onlyFollowed', 'true'], ['fs1.followed', '["manchesterunited","arsenal"]']], true);
+  h.context.fixtures = [
+    { ...match('united', 'eng.1', 2, '360', 9), home: { name: 'Manchester United', teamId: '360' } },
+    { ...match('arsenal', 'eng.1', 2, '359', 9), home: { name: 'Arsenal', teamId: '359' } },
+  ];
+  h.call(`reload = () => {}; state.loading = false; state.data = { matches: [], failed: [], fetchedAt: Date.now() };
+    state.preview = { dayKey: '2026-10-02', kind: 'followed', count: 2, matches: fixtures, partial: false };
+    toggleFollow({ name: 'Arsenal', teamId: '359' })`);
+  assert.deepEqual([...h.call('getSnapshot().preview.matches.map((m) => m.id)')], ['united']);
+  assert.equal(h.call('getSnapshot().preview.count'), 1);
+  assert.doesNotMatch(h.elements['#list'].innerHTML, /阿森纳/);
 });

@@ -33,6 +33,7 @@ export interface Snapshot {
   dayKey: string;
   windowStart: string;
   view: 'day' | 'week';
+  onlyFollowed: boolean;
   enabled: Set<string>;
   followed: FollowRecord[];
   data: DayData | null;
@@ -52,8 +53,9 @@ export interface AppApi {
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => Snapshot;
   start: () => () => void;
-  gotoDay: (key: string) => void;
+  gotoDay: (key: string, options?: { resetWeek?: boolean }) => void;
   setView: (view: 'day' | 'week') => void;
+  setOnlyFollowed: (onlyFollowed: boolean) => void;
   reload: (options?: { force?: boolean }) => unknown;
   toggleLeague: (id: string) => void;
   toggleFilters: () => void;

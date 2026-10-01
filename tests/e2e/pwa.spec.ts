@@ -6,6 +6,7 @@ test('production shell and preferences can reopen offline', async ({ page, conte
   await page.goto('./');
   await expect(page.locator('#heroCount')).toHaveText('1 场');
   await page.getByRole('button', { name: '关注曼联', exact: true }).click();
+  await page.getByRole('button', { name: '只看关注', exact: true }).click();
   await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
   const manifest = await page.locator('link[rel="manifest"]').getAttribute('href');
   expect(manifest).toBe('/football-schedule/manifest.webmanifest');
@@ -42,4 +43,8 @@ test('production shell and preferences can reopen offline', async ({ page, conte
   await expect(page.locator('#heroCount')).toContainText('1 场');
   await expect(page.locator('#followCount')).toHaveText('1');
   await expect(page.getByRole('heading', { name: '★ 我的关注' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '只看关注', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: '按周查看' }).click();
+  await expect(page.locator('#heroDate')).toHaveText('09.30–10.06');
+  await expect(page.locator('#list .match')).toHaveCount(1);
 });

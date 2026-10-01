@@ -15,6 +15,7 @@ const LS_ENABLED = 'fs1.enabled';
 const LS_DAY = 'fs1.day';
 const LS_FOLLOWED = 'fs1.followed';
 const LS_VIEW = 'fs1.view';
+const LS_ONLY_FOLLOWED = 'fs1.onlyFollowed';
 
 /* 页面文案与显示时机见 docs/ui-copy.md。日/周视图共用同一套状态词。 */
 
@@ -32,6 +33,7 @@ const state = {
   dayKey: null,
   windowStart: null,
   view: 'day',
+  onlyFollowed: false,
   enabled: new Set(),
   followed: [],
   data: null,
@@ -89,6 +91,9 @@ function followedLeagues() {
 /* 关注球队可能在已关闭的联赛里比赛：抓取范围 = 启用联赛 ∪ 关注球队所在联赛；
  * 展示时关闭联赛只保留关注球队的比赛（进“我的关注”，不出现在联赛分组） */
 function fetchLeagues() {
+  if (state.onlyFollowed && !state.followed.length) return [];
+  // A follow added from one match only knows that competition. Keep selected
+  // competitions too, so a domestic-league follow can still find cup matches.
   return [...new Set([...state.enabled, ...followedLeagues()])];
 }
 
@@ -98,6 +103,16 @@ function matchVisible(m) {
 
 function visibleDay(r) {
   return r && r.matches ? { ...r, matches: r.matches.filter(matchVisible) } : r;
+}
+
+// Keep loaded matches in the controller; changing the scope or a follow must not
+// discard them. The published view always uses the current follow preferences.
+function displayedDay(data) {
+  return data && {
+    ...data,
+    matches: data.matches.filter((m) => matchVisible(m) && (!state.onlyFollowed || matchHasFollowed(m)))
+      .sort((a, b) => new Date(a.start) - new Date(b.start)),
+  };
 }
 
 async function loadDayVisible(dayKey, opts = {}) {
@@ -148,7 +163,7 @@ function followChanged(opts = {}) {
   publish();
   /* 空日关注变化要重算预览，但保留旧预览直到新结果就绪，避免键盘焦点丢失。 */
   // 国家队可来自搜索或已关闭的赛事，关注变化后立即按新范围重取当前日/周。
-  if (opts.national || (state.data && !state.data.matches.length)) reload({ preservePreview: true });
+  if (state.onlyFollowed || opts.national || (state.data && !state.data.matches.length)) reload({ preservePreview: true });
 }
 
 function toggleFollow(team) {
@@ -240,6 +255,10 @@ function loadEnabled() {
   }
 }
 
+function loadOnlyFollowed() {
+  try { return localStorage.getItem(LS_ONLY_FOLLOWED) === 'true'; } catch (e) { return false; }
+}
+
 function loadPrefs() {
   state.enabled = loadEnabled();
   state.followed = loadFollowed();
@@ -249,8 +268,10 @@ function loadPrefs() {
   state.dayKey = savedDay && /^\d{4}-\d{2}-\d{2}$/.test(savedDay) ? savedDay : today;
   // 回访时若上次停留在很远的日期，回到今天
   if (Math.abs(parseDayKey(state.dayKey) - parseDayKey(today)) > 2 * 864e5) state.dayKey = today;
-  state.windowStart = addDays(state.dayKey, -3);
   state.view = (() => { try { return localStorage.getItem(LS_VIEW) === 'week' ? 'week' : 'day'; } catch (e) { return 'day'; } })();
+  if (state.view === 'week' && state.dayKey < today) state.dayKey = today;
+  state.onlyFollowed = loadOnlyFollowed();
+  state.windowStart = state.view === 'week' ? state.dayKey : addDays(state.dayKey, -3);
 }
 
 /* 按键写入：每次只写本次操作真正变化的那个偏好，避免另一页的 day/view 被顺手覆盖 */
@@ -265,27 +286,30 @@ function saveFollowed() { writePref(LS_FOLLOWED, JSON.stringify(state.followed))
 function saveEnabled() { writePref(LS_ENABLED, JSON.stringify([...state.enabled])); }
 function saveDay() { writePref(LS_DAY, state.dayKey); }
 function saveView() { writePref(LS_VIEW, state.view); }
+function saveOnlyFollowed() { writePref(LS_ONLY_FOLLOWED, String(state.onlyFollowed)); }
 
 /* 跨标签页：其他标签页写了 fs1.followed / fs1.enabled 时回读并重绘。
    只读不写、且只回读相关键——本处理函数绝不写任何偏好，避免把本标签页的旧值盖回去。 */
 function onStorageEvent(e) {
   if (!e) return;
   const key = e.key;
-  if (key !== null && key !== LS_FOLLOWED && key !== LS_ENABLED) return;
+  if (key !== null && key !== LS_FOLLOWED && key !== LS_ENABLED && key !== LS_ONLY_FOLLOWED) return;
   const followedChanged = key === null || key === LS_FOLLOWED;
   const enabledChanged = key === null || key === LS_ENABLED;
+  const scopeChanged = key === null || key === LS_ONLY_FOLLOWED;
   const nationalBefore = JSON.stringify(state.followed.filter(isNationalFollow));
   if (followedChanged) state.followed = loadFollowed();
   if (enabledChanged) state.enabled = loadEnabled();
+  if (scopeChanged) state.onlyFollowed = loadOnlyFollowed();
   invalidateFollowNext();
   publish();
-  if (enabledChanged) {
+  if (enabledChanged || scopeChanged) {
     state.data = null;
     state.weekDays = null;
     reload();
     return;
   }
-  if (followedChanged && nationalBefore !== JSON.stringify(state.followed.filter(isNationalFollow))) {
+  if (followedChanged && (state.onlyFollowed || nationalBefore !== JSON.stringify(state.followed.filter(isNationalFollow)))) {
     reload({ preservePreview: true });
     return;
   }
@@ -307,14 +331,15 @@ const DAY_DOT_TEXT = {
 };
 
 function dayDotState(dayKey) {
-  const ms = cachedDayMatches(dayKey, fetchLeagues()).filter(matchVisible);
+  if (state.onlyFollowed && !state.followed.length) return 'off';
+  const ms = displayedDay({ matches: cachedDayMatches(dayKey, fetchLeagues()) }).matches;
   if (ms.some(matchHasFollowed)) return 'fill';
   if (ms.length) return 'hollow';
   const months = monthsForDay(dayKey);
   const now = Date.now();
   let total = 0;
   let fresh = 0;
-  for (const id of state.enabled) {
+  for (const id of state.onlyFollowed ? fetchLeagues() : state.enabled) {
     for (const ym of months) {
       total += 1;
       const entry = readCache(id, ym);
@@ -428,18 +453,18 @@ function toggleFollowPanel() {
  * 关注的 favPrev/favNext 按并集计数；预览加载：关注场次用并集，普通场次用启用联赛。 */
 async function enrichEmptyDay(seq) {
   const enabled = [...state.enabled];
-  const union = [...new Set([...enabled, ...followedLeagues()])];
+  const union = fetchLeagues();
   const nearby = await findNearbyMatchdays(state.dayKey, {
     leagues: union,
-    genericLeagues: enabled,
+    genericLeagues: state.onlyFollowed ? [] : enabled,
     favLeagues: union,
     isFav: state.followed.length ? matchHasFollowed : null,
   });
   if (seq !== loadSeq) return;
-  state.nearby = nearby;
+  state.nearby = state.onlyFollowed ? { prev: nearby.favPrev, next: nearby.favNext } : nearby;
   const f = nearby.favNext || nearby.favPrev;
   const g = nearby.next || nearby.prev;
-  const target = f || g;
+  const target = f || (state.onlyFollowed ? null : g);
   const kind = f ? 'followed' : 'any';
   let preview = null;
   if (target) {
@@ -458,6 +483,16 @@ async function enrichEmptyDay(seq) {
 }
 
 async function reload(opts = {}) {
+  if (state.onlyFollowed && !state.followed.length) {
+    ++loadSeq;
+    clearTimeout(liveTimer);
+    state.loading = false;
+    state.error = null;
+    state.nearby = null;
+    state.preview = null;
+    publish();
+    return;
+  }
   if (state.view === 'week') return reloadWeek(opts);
   const seq = ++loadSeq;
   let earlyUpdate = null;
@@ -476,7 +511,7 @@ async function reload(opts = {}) {
         enrichFollowedFromMatches(fresh.matches);
         invalidateFollowNext();
         publish();
-        if (!fresh.matches.length && !fresh.pending && (!state.nearby || opts.preservePreview)) enrichEmptyDay(seq);
+        if (!displayedDay(fresh).matches.length && !fresh.pending && (!state.nearby || opts.preservePreview)) enrichEmptyDay(seq);
         scheduleLivePoll();
       },
     });
@@ -491,7 +526,7 @@ async function reload(opts = {}) {
     }
     state.loading = false;
     publish(); /* 先出当日视图：空场面板不等就近搜索 */
-    if (!state.data.pending && !state.data.matches.length) await enrichEmptyDay(seq);
+    if (!state.data.pending && !displayedDay(state.data).matches.length) await enrichEmptyDay(seq);
   } catch (e) {
     if (seq !== loadSeq) return;
     state.error = (e && e.message) || '未知错误';
@@ -561,8 +596,8 @@ async function reloadWeek(opts = {}) {
 
 function currentMatches() {
   return state.view === 'week'
-    ? (state.weekDays || []).flatMap((d) => d.matches)
-    : (state.data && state.data.matches) || [];
+    ? (state.weekDays || []).flatMap((d) => displayedDay(d).matches)
+    : displayedDay(state.data)?.matches || [];
 }
 
 function scheduleLivePoll() {
@@ -613,14 +648,19 @@ function schedulePrefetch() {
   }, 1500);
 }
 
-function gotoDay(dayKey) {
+function gotoDay(dayKey, opts = {}) {
   const prevStart = state.windowStart;
   state.dayKey = dayKey;
   const end = addDays(state.windowStart, STRIP_LEN - 1);
-  if (dayKey < state.windowStart) state.windowStart = addDays(dayKey, -3);
-  if (dayKey > end) state.windowStart = addDays(dayKey, 3 - STRIP_LEN + 1);
+  if (state.view === 'week') {
+    if (opts.resetWeek || dayKey < state.windowStart || dayKey > end) state.windowStart = dayKey;
+  } else {
+    if (dayKey < state.windowStart) state.windowStart = addDays(dayKey, -3);
+    if (dayKey > end) state.windowStart = addDays(dayKey, 3 - STRIP_LEN + 1);
+  }
   saveDay();
   if (state.view === 'week') {
+    if (state.windowStart !== prevStart) state.weekDays = null;
     publish();
     if (!state.weekDays || state.windowStart !== prevStart) reload();
     return;
@@ -633,6 +673,7 @@ function gotoDay(dayKey) {
 function setView(view) {
   if (state.view === view) return;
   state.view = view;
+  state.windowStart = view === 'week' ? state.dayKey : addDays(state.dayKey, -3);
   saveView();
   if (view === 'week') {
     state.nearby = null;
@@ -645,6 +686,16 @@ function setView(view) {
   reload();
 }
 
+function setOnlyFollowed(onlyFollowed) {
+  if (state.onlyFollowed === onlyFollowed) return;
+  state.onlyFollowed = onlyFollowed;
+  saveOnlyFollowed();
+  state.nearby = null;
+  state.preview = null;
+  publish();
+  reload();
+}
+
 // The controller owns data and user preferences. React subscribes to cached snapshots;
 // reading a snapshot never mutates preferences or starts a request.
 const listeners = new Set();
@@ -652,11 +703,18 @@ let snapshot;
 let active = false;
 let countdownTimer = null;
 function publish() {
+  let preview = state.preview;
+  if (state.onlyFollowed && preview) {
+    preview = displayedDay(preview);
+    preview = preview.matches.length ? { ...preview, count: preview.matches.length } : null;
+  }
   snapshot = {
     ...state,
     enabled: new Set(state.enabled),
     followed: state.followed.map((rec) => ({ ...rec, names: [...rec.names], leagues: [...rec.leagues] })),
-    weekDays: state.weekDays ? [...state.weekDays] : null,
+    data: displayedDay(state.data),
+    weekDays: state.weekDays ? state.weekDays.map(displayedDay) : null,
+    preview,
     search: { ...search },
     followNext: followNextList(),
     now: Date.now(),
@@ -704,7 +762,7 @@ function onKeyDown(e) {
   if (e.key === 'Home' || e.key === 't' || e.key === 'T') next = dayKeyOf(new Date());
   if (!next) return;
   e.preventDefault();
-  gotoDay(next);
+  gotoDay(next, { resetWeek: e.key === 'Home' || e.key === 't' || e.key === 'T' });
   if (t?.matches?.('[data-day]')) requestAnimationFrame(() => {
     document.querySelector(`[data-day="${next}"]`)?.focus();
   });
@@ -733,7 +791,7 @@ function stop() {
 }
 loadPrefs();
 publish();
-export { subscribe, getSnapshot, start, stop, gotoDay, setView, reload, toggleLeague, toggleFilters,
+export { subscribe, getSnapshot, start, stop, gotoDay, setView, setOnlyFollowed, reload, toggleLeague, toggleFilters,
   toggleFollow, unfollowAt, toggleFollowPanel, setSearchQuery, loadCatalog, followSearchResult,
   isFollowed, matchHasFollowed, dayDotState, followDisplayName, followMetaText, followNextText,
   scheduleStatus, scheduleNotice, UI_TEXT, STATUS_LABEL, DAY_DOT_TEXT, STRIP_LEN };
