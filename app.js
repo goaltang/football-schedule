@@ -533,6 +533,7 @@ async function reload(opts = {}) {
     state.error = (e && e.message) || '未知错误';
     state.loading = false;
     publish();
+    scheduleLivePoll();
     return;
   }
   scheduleLivePoll();
@@ -567,6 +568,7 @@ async function reloadWeek(opts = {}) {
             enrichFollowedFromMatches(fresh.matches);
             invalidateFollowNext();
             publish();
+            scheduleLivePoll();
           },
         });
         return { dayKey: key, matches: d.matches, failed: d.failed, stale: d.stale, pending: d.pending, fetchedAt: d.fetchedAt };
@@ -589,6 +591,7 @@ async function reloadWeek(opts = {}) {
     state.error = (e && e.message) || '未知错误';
     state.loading = false;
     publish();
+    scheduleLivePoll();
     return;
   }
   scheduleLivePoll();

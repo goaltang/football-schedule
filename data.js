@@ -338,7 +338,7 @@ async function ensureMonth(leagueId, ym, opts = {}) {
     const fallback = readCache(leagueId, ym);
     const snapshotFresh = fallback && fallback.source === 'snapshot'
       && Date.now() - fallback.fetchedAt < monthTtlMs(ym, fallback);
-    return { data: fallback, fromCache: !!fallback, stale: !!fallback && !snapshotFresh, failed: !fallback };
+    return { data: fallback, fromCache: !!fallback, stale: !!fallback && !snapshotFresh, failed: !fallback, refreshFailed: true };
   }
 }
 
@@ -526,7 +526,9 @@ async function collectView(dayKey, jobs, policy) {
     let added = false;
     for (const m of r.data.events) {
       if (dayKeyOf(new Date(m.start)) === dayKey) {
-        matches.set(m.id, m);
+        // Keep each score's own retrieval time and failed-refresh result. A fresh
+        // schedule snapshot is not evidence that the live score just refreshed.
+        matches.set(m.id, { ...m, fetchedAt: r.data.fetchedAt, refreshFailed: !!r.refreshFailed });
         added = true;
       }
     }

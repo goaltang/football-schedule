@@ -13,6 +13,8 @@ export interface Match {
   live?: boolean;
   minute?: string;
   detail?: string;
+  fetchedAt?: number;
+  refreshFailed?: boolean;
   home: Team;
   away: Team;
 }
