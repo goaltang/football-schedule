@@ -77,6 +77,18 @@ body {
   font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
 }
 
+.score-update {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 0 2px 12px;
+  color: color-mix(in srgb, var(--muted) 74%, var(--paper)); font-size: 12px;
+}
+.score-update::before {
+  content: ''; width: 6px; height: 6px; flex: none; border-radius: 50%;
+  background: var(--accent);
+}
+.score-update.failed, .score-update.delayed { color: color-mix(in srgb, var(--warn) 72%, var(--paper)); }
+.score-update.failed::before, .score-update.delayed::before { background: var(--warn); }
+
 /* 巨型日期：页面的海报元素 */
 .day-hero {
   display: flex; align-items: baseline; justify-content: space-between; gap: 16px;

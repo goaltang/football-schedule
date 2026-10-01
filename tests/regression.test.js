@@ -211,6 +211,7 @@ function harness(entries = [], withApp = false) {
     get length() { return values.size; },
   };
   const elements = {};
+  let heroMarkup = () => '';
   const el = (name = '') => {
     const classes = new Set();
     const listeners = new Map();
@@ -348,6 +349,7 @@ function harness(entries = [], withApp = false) {
       return vm.runInContext(`${name}(...__args)`, context);
     }]));
     const markup = (Component, extra = {}) => renderToStaticMarkup(createElement(Component, { state: api.getSnapshot(), api, ...extra }));
+    heroMarkup = () => markup(Hero);
     const paint = () => {
       const state = api.getSnapshot();
       elements['#list'].innerHTML = markup(state.view === 'week' ? WeekSchedule : DaySchedule);
@@ -379,6 +381,7 @@ function harness(entries = [], withApp = false) {
     context,
     storage,
     elements,
+    hero: () => heroMarkup(),
     attempts: () => attempts,
     setFetch: (fn) => { fetchImpl = fn; },
     call: (expression) => vm.runInContext(expression, context),
@@ -425,6 +428,122 @@ function futureDayKey(daysAhead) {
   d.setDate(d.getDate() + daysAhead);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+test('failed live refresh preserves score age even when the fallback snapshot is fresh', async () => {
+  const h = harness();
+  const now = Date.now();
+  const old = now - 3 * 3600e3;
+  const day = h.call('dayKeyOf(new Date())');
+  const live = { ...match('live-score', 'eng.1', 1), start: new Date(now).toISOString(),
+    status: 'LIVE', live: true, home: { name: 'Arsenal', teamId: '359', score: 1 } };
+  for (const league of ['eng.1', 'esp.1']) for (const ym of h.call(`monthsForDay('${day}')`)) {
+    h.storage.setItem(`fs1|m|${league}|${ym}`, JSON.stringify({ source: 'snapshot',
+      fetchedAt: league === 'eng.1' ? old : now, league: { id: league, logo: '' }, events: league === 'eng.1' ? [live] : [] }));
+  }
+  const result = await h.call(`loadDay('${day}', { leagues: ['eng.1', 'esp.1'], force: true })`);
+  assert.equal(result.stale, false); // The schedule is still usable for six hours.
+  assert.equal(result.fetchedAt, now);
+  assert.equal(result.matches[0].fetchedAt, old);
+  assert.equal(result.matches[0].refreshFailed, true);
+  assert.equal(result.matches[0].home.score, 1);
+  assert.equal(h.call('readCache("eng.1", monthsForDay(dayKeyOf(new Date()))[0]).events[0].refreshFailed'), undefined);
+
+  h.setFetch((url) => ({ ok: true, json: async () => ({ events: String(url).includes('/eng.1/') ? [{
+    id: 'live-score', date: live.start, status: { type: { state: 'in' }, displayClock: '35' },
+    competitions: [{ competitors: [
+      { homeAway: 'home', team: { id: '359', displayName: 'Arsenal' }, score: '2' },
+      { homeAway: 'away', team: { id: '99', displayName: 'Away' }, score: '0' },
+    ] }],
+  }] : [] }) }));
+  const recovered = await h.call(`loadDay('${day}', { leagues: ['eng.1', 'esp.1'], force: true })`);
+  assert.ok(recovered.matches[0].fetchedAt > old);
+  assert.equal(recovered.matches[0].refreshFailed, false);
+  assert.equal(recovered.matches[0].home.score, 2);
+});
+
+test('live score hints keep the oldest visible score time across day and week views', () => {
+  const h = harness([], true);
+  const now = new Date('2026-10-01T12:00:00').getTime();
+  h.advance(now - Date.now());
+  h.context.oldLive = { ...match('old', 'eng.1', 1, '359', 9), status: 'LIVE', live: true,
+    fetchedAt: now - 24 * 3600e3, home: { name: 'Arsenal', teamId: '359', score: 1 } };
+  h.context.freshLive = { ...match('fresh', 'esp.1', 1, '86', 9), status: 'LIVE', live: true,
+    fetchedAt: now, home: { name: 'Real Madrid', teamId: '86', score: 2 } };
+  h.call(`state.loading = false; state.error = null; state.enabled = new Set(['eng.1', 'esp.1']);
+    state.data = { matches: [oldLive, freshLive], failed: [], fetchedAt: Date.now() }; publish()`);
+  assert.equal(h.elements['#updated'].textContent, '比分更新于 9/30 12:00');
+  assert.match(h.hero(), /比分可能已延迟/);
+  h.advance(60e3);
+  h.call('minuteTick()');
+  assert.equal(h.elements['#updated'].textContent, '比分更新于 9/30 12:00');
+
+  h.call(`state.view = 'week'; state.weekDays = [
+    { dayKey: '2026-09-30', matches: [oldLive], fetchedAt: oldLive.fetchedAt },
+    { dayKey: '2026-10-01', matches: [freshLive], fetchedAt: freshLive.fetchedAt },
+  ]; publish()`);
+  assert.equal(h.elements['#updated'].textContent, '比分更新于 9/30 12:00');
+  h.call(`state.followed = [mkFollowRecord('86', 'Real Madrid', nameKeys(freshLive.home), ['esp.1'])]; state.onlyFollowed = true; publish()`);
+  assert.equal(h.elements['#updated'].textContent, '比分更新于 12:00');
+  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  assert.doesNotMatch(h.hero(), /比分可能已延迟/);
+});
+
+test('score hints report affected live games while retaining the previous result during updates', () => {
+  const h = harness([], true);
+  h.context.fixture = { ...match('live', 'eng.1', 1), status: 'LIVE', live: true,
+    fetchedAt: Date.now(), refreshFailed: true };
+  h.context.other = { ...match('other-live', 'eng.1', 1), status: 'LIVE', live: true, fetchedAt: Date.now() };
+  h.call(`state.loading = false; state.error = null;
+    state.data = { matches: [fixture, other], failed: [], fetchedAt: Date.now() }; publish()`);
+  assert.match(h.hero(), /部分比分更新失败 · 稍后自动重试/);
+  const before = h.elements['#updated'].textContent;
+  h.call('state.loading = true; publish()');
+  assert.match(h.hero(), /正在更新比分… · 当前显示上次结果/);
+  assert.equal(h.elements['#updated'].textContent, before);
+  h.call(`state.loading = false; fixture.refreshFailed = false; other.status = 'FT'; other.live = false;
+    other.refreshFailed = true; publish()`);
+  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  assert.doesNotMatch(h.hero(), /比分更新失败/);
+  h.call('fixture.status = "FT"; fixture.live = false; publish()');
+  assert.doesNotMatch(h.hero(), /id="scoreUpdate"/);
+  assert.match(h.elements['#updated'].textContent, /^赛程更新于 /);
+});
+
+test('unknown live score times never borrow a newer schedule timestamp', () => {
+  const h = harness([], true);
+  h.context.fixture = { ...match('unknown-time', 'eng.1', 1), status: 'LIVE', live: true };
+  h.call('state.loading = false; state.data = { matches: [fixture], failed: [], fetchedAt: Date.now() }; publish()');
+  assert.equal(h.elements['#updated'].textContent, '');
+  assert.match(h.hero(), /比分可能已延迟/);
+});
+
+test('a live game arriving in a weekly background update starts score polling', async () => {
+  const h = harness([], true);
+  h.call(`state.view = 'week'; state.windowStart = '2026-10-01'; const updates = new Map();
+    let polls = 0; scheduleLivePoll = () => { polls++; };
+    loadDayVisible = async (key, opts) => {
+      updates.set(key, opts.onUpdate);
+      return { dayKey: key, matches: [], failed: [], pending: true, fetchedAt: Date.now() };
+    }`);
+  await h.call('reloadWeek()');
+  const before = h.call('polls');
+  h.context.fixture = { ...match('late-live', 'eng.1', 1, '42', 9), status: 'LIVE', live: true,
+    fetchedAt: Date.now(), refreshFailed: true };
+  h.call(`updates.get('2026-10-01')({ dayKey: '2026-10-01', matches: [fixture], failed: [], fetchedAt: Date.now() })`);
+  assert.equal(h.call('polls'), before + 1);
+  assert.match(h.hero(), /比分更新失败 · 稍后自动重试/);
+});
+
+test('a page-level refresh error keeps the live score and schedules another attempt', async () => {
+  const h = harness([], true);
+  h.context.fixture = { ...match('kept-live', 'eng.1', 1), status: 'LIVE', live: true, fetchedAt: Date.now() };
+  h.call(`state.data = { matches: [fixture], failed: [], fetchedAt: Date.now() };
+    let polls = 0; scheduleLivePoll = () => { polls++; }; loadDayVisible = async () => { throw new Error('unavailable'); }`);
+  await h.call('reload({ force: true })');
+  assert.equal(h.call('polls'), 1);
+  assert.equal(h.call('getSnapshot().data.matches[0].id'), 'kept-live');
+  assert.match(h.hero(), /比分更新失败 · 稍后自动重试/);
+});
 
 test('partially unavailable leagues do not hide nearby cached matchdays', async () => {
   const h = harness([

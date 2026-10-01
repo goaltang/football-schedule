@@ -1,5 +1,6 @@
 import { addDays, parseDayKey } from '../../data.js';
-import { fmtClock, weekdayOf, relativeLabel } from '../domain/format.js';
+import { weekdayOf, relativeLabel } from '../domain/format.js';
+import { scoreUpdateInfo, updateTimeLabel } from '../domain/score-updates.js';
 import type { DayData, ViewProps } from '../types';
 import { UI_TEXT } from '../domain/presentation.js';
 export const uiText = UI_TEXT;
@@ -11,6 +12,11 @@ export function weekSummary(state: ViewProps['state']): DayData | null {
 export function Hero({ state, api }: ViewProps) {
   const weekly = state.view === 'week';
   const data = weekly ? weekSummary(state) : state.data;
+  const scoreUpdate = scoreUpdateInfo(data, { error: Boolean(state.error), loading: state.loading, now: state.now,
+    pending: weekly ? (state.weekDays || []).some((day) => day.pending && day.matches.some((match) => match.live || match.status === 'LIVE')) : data?.pending });
+  const fetchedAt = scoreUpdate ? scoreUpdate.fetchedAt : data?.fetchedAt;
+  const updated = [fetchedAt ? `${scoreUpdate ? '比分' : '赛程'}更新于 ${updateTimeLabel(fetchedAt, state.now)}` : '',
+    !scoreUpdate && (state.loading || data?.pending) ? uiText.updating : ''].filter(Boolean).join(' · ');
   const status = api.scheduleStatus(data, state.error, state.loading);
   const badge = status === 'ready' ? '' : uiText[status];
   const count = data?.matches.length || 0;
@@ -21,7 +27,8 @@ export function Hero({ state, api }: ViewProps) {
     : state.loading || data?.pending ? uiText.loading : state.error ? uiText.unavailable
       : !data || (!weekly && !data.fetchedAt) || status !== 'ready' ? uiText.unconfirmed : state.onlyFollowed ? '暂无关注球队比赛' : weekly ? uiText.emptyWeek : uiText.emptyDay;
   const relative = relativeLabel(state.dayKey);
-  return <header className="top"><div className="masthead"><h1>赛程</h1><div className="mast-side"><span className="meta" id="updated">{[data?.fetchedAt ? `更新于 ${fmtClock(data.fetchedAt)}` : '', state.loading || data?.pending ? uiText.updating : ''].filter(Boolean).join(' · ')}</span></div></div>
+  return <header className="top"><div className="masthead"><h1>赛程</h1><div className="mast-side"><span className="meta" id="updated">{updated}</span></div></div>
     <div className="day-hero"><div className="hero-main"><span className="hero-date" id="heroDate">{weekly ? range : monthDay(state.dayKey)}</span><span className="hero-wd" id="heroWd">{weekly ? '7天' : weekdayOf(state.dayKey)}</span><span className="hero-rel" id="heroRel">{weekly || relative === weekdayOf(state.dayKey) ? '' : relative}</span></div><span className="hero-count" id="heroCount">{total}</span></div>
+    {scoreUpdate && <p className={`score-update ${scoreUpdate.phase}`} id="scoreUpdate" role="status" aria-live="polite" aria-atomic="true">{scoreUpdate.text}</p>}
   </header>;
 }
