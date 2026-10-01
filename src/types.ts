@@ -58,6 +58,7 @@ export interface AppApi {
   setOnlyFollowed: (onlyFollowed: boolean) => void;
   reload: (options?: { force?: boolean }) => unknown;
   toggleLeague: (id: string) => void;
+  setLeagues: (ids: string[]) => void;
   toggleFilters: () => void;
   toggleFollowPanel: () => void;
   toggleFollow: (team: Team & { league?: string; leagues?: string[] }) => void;

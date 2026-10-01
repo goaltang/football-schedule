@@ -33,10 +33,37 @@ test('national competition filters preserve saved club choices', () => {
   assert.match(h.elements['#chips'].innerHTML, /aria-label="俱乐部赛事"/);
   assert.match(h.elements['#chips'].innerHTML, /aria-label="国家队赛事"/);
   assert.match(h.elements['#chips'].innerHTML, /data-league="fifa.friendly" aria-pressed="false"/);
-  assert.equal(h.elements['#filterCount'].textContent, `2/${h.call('LEAGUES.length')}`);
+  assert.equal(h.elements['#filterCount'].textContent, '已选 2');
   h.call('state.enabled.add("fifa.friendly"); saveEnabled(); publish()');
   assert.match(h.elements['#chips'].innerHTML, /data-league="fifa.friendly" aria-pressed="true"/);
   assert.deepEqual(JSON.parse(h.storage.getItem('fs1.enabled')), ['eng.1', 'esp.1', 'fifa.friendly']);
+});
+
+test('batch league choices persist once, reload once and preserve unrelated preferences', () => {
+  const h = harness([['fs1.enabled', '["eng.1","esp.1"]']], true);
+  const originalSetItem = h.storage.setItem;
+  const writes = [];
+  h.storage.setItem = (key, value) => { writes.push(key); originalSetItem(key, value); };
+  h.call('let selectionReloads = 0; reload = () => { selectionReloads++; }');
+  const day = h.call('state.dayKey');
+  h.call('setLeagues(["uefa.champions", "uefa.europa", "uefa.champions", "unknown"])');
+  assert.deepEqual(JSON.parse(h.storage.getItem('fs1.enabled')), ['uefa.champions', 'uefa.europa']);
+  assert.deepEqual(writes, ['fs1.enabled']);
+  assert.equal(h.call('selectionReloads'), 1);
+  assert.equal(h.call('state.dayKey'), day);
+  h.call('setLeagues(["uefa.europa", "uefa.champions"]); setLeagues([]); setLeagues(["unknown"])');
+  assert.equal(h.call('selectionReloads'), 1);
+  assert.deepEqual(writes, ['fs1.enabled']);
+});
+
+test('the last selected competition cannot be removed and obsolete saved IDs are ignored', () => {
+  const h = harness([['fs1.enabled', '["eng.1","obsolete"]']], true);
+  assert.deepEqual([...h.call('state.enabled')], ['eng.1']);
+  h.call('let selectionReloads = 0; reload = () => { selectionReloads++; }; toggleLeague("eng.1")');
+  assert.deepEqual([...h.call('state.enabled')], ['eng.1']);
+  assert.equal(h.call('selectionReloads'), 0);
+  h.storage.setItem('fs1.enabled', '["obsolete"]');
+  assert.deepEqual([...h.call('loadEnabled()')], [...h.call('DEFAULT_ENABLED')]);
 });
 
 test('national team search merges competitions and supports Chinese names and nicknames', () => {
@@ -315,7 +342,7 @@ function harness(entries = [], withApp = false) {
   if (withApp) {
     for (const file of ['src/domain/format.js', 'src/domain/following.js', 'src/domain/catalog.js', 'src/domain/presentation.js']) vm.runInContext(scriptSource(file), context);
     vm.runInContext(appSource, context, { filename: 'app.js' });
-    const methods = ['getSnapshot', 'gotoDay', 'setView', 'setOnlyFollowed', 'reload', 'toggleLeague', 'toggleFilters', 'toggleFollowPanel', 'toggleFollow', 'unfollowAt', 'setSearchQuery', 'loadCatalog', 'followSearchResult', 'isFollowed', 'matchHasFollowed', 'dayDotState', 'followDisplayName', 'followMetaText', 'followNextText', 'scheduleStatus', 'scheduleNotice'];
+    const methods = ['getSnapshot', 'gotoDay', 'setView', 'setOnlyFollowed', 'reload', 'toggleLeague', 'setLeagues', 'toggleFilters', 'toggleFollowPanel', 'toggleFollow', 'unfollowAt', 'setSearchQuery', 'loadCatalog', 'followSearchResult', 'isFollowed', 'matchHasFollowed', 'dayDotState', 'followDisplayName', 'followMetaText', 'followNextText', 'scheduleStatus', 'scheduleNotice'];
     const api = Object.fromEntries(methods.map((name) => [name, (...args) => {
       context.__args = args;
       return vm.runInContext(`${name}(...__args)`, context);
@@ -331,7 +358,7 @@ function harness(entries = [], withApp = false) {
       const filters = markup(LeagueFilters);
       elements['.filters'].innerHTML = filters;
       elements['#refresh'].setAttribute('aria-busy', /id="refresh" aria-busy="([^"]*)"/.exec(filters)[1]);
-      elements['#filterCount'].textContent = `${state.enabled.size}/${vm.runInContext('LEAGUES.length', context)}`;
+      elements['#filterCount'].textContent = /id="filterCount">([^<]*)/.exec(filters)[1];
       elements['#followCount'].textContent = state.followed.length ? String(state.followed.length) : '';
       elements['#followToggle'].setAttribute('aria-expanded', String(state.followOpen));
       if (state.followOpen) elements['#followManager'].removeAttribute('hidden');
