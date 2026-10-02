@@ -42,6 +42,7 @@ const state = {
   tonightDays: null,
   nearby: null,
   preview: null,
+  previewReveal: null,
   loading: false,
   error: null,
   followOpen: false,
@@ -50,6 +51,7 @@ const state = {
 
 let liveTimer = null;
 let loadSeq = 0;
+let previewRevealSeq = 0;
 
 /* 关注模型：fs1.followed 是“球队档案”数组，每条 { id, name, names, leagues }。
  * - names 存归一化名字（含 TEAM_ZH 别名键），是身份的权威来源；
@@ -160,6 +162,7 @@ function enrichFollowedFromMatches(matches) {
 }
 
 function followChanged(opts = {}) {
+  state.previewReveal = null;
   invalidateFollowNext();
   saveFollowed();
   publish();
@@ -301,6 +304,7 @@ function onStorageEvent(e) {
   const followedChanged = key === null || key === LS_FOLLOWED;
   const enabledChanged = key === null || key === LS_ENABLED;
   const scopeChanged = key === null || key === LS_ONLY_FOLLOWED;
+  state.previewReveal = null;
   const nationalBefore = JSON.stringify(state.followed.filter(isNationalFollow));
   if (followedChanged) state.followed = loadFollowed();
   if (enabledChanged) state.enabled = loadEnabled();
@@ -448,6 +452,7 @@ function followMetaText(rec) {
 
 function toggleFollowPanel() {
   state.followOpen = !state.followOpen;
+  if (state.followOpen) state.previewReveal = null;
   invalidateFollowNext();
   publish();
 }
@@ -666,6 +671,10 @@ function schedulePrefetch() {
 }
 
 function gotoDay(dayKey, opts = {}) {
+  state.previewReveal = opts.revealMatch ? {
+    id: ++previewRevealSeq, dayKey, matchId: opts.revealMatch.id, league: opts.revealMatch.league,
+  } : null;
+  if (state.previewReveal) state.followOpen = false;
   if (state.view === 'tonight') {
     state.view = 'day';
     saveView();
@@ -680,6 +689,11 @@ function gotoDay(dayKey, opts = {}) {
     if (dayKey > end) state.windowStart = addDays(dayKey, 3 - STRIP_LEN + 1);
   }
   saveDay();
+  // Publish the navigation as loading before React can reveal old results.
+  if (state.previewReveal && (state.view !== 'week' || !state.weekDays || state.windowStart !== prevStart)) {
+    state.loading = true;
+    state.error = null;
+  }
   if (state.view === 'week') {
     if (state.windowStart !== prevStart) state.weekDays = null;
     publish();
@@ -694,6 +708,7 @@ function gotoDay(dayKey, opts = {}) {
 function setView(view) {
   if (!['day', 'week', 'tonight'].includes(view)) return;
   if (view !== 'tonight' && state.view === view) return;
+  state.previewReveal = null;
   if (view === 'tonight') {
     const day = tonightDayKey();
     if (state.view === view && state.dayKey === day) return;
@@ -728,6 +743,7 @@ function syncTonight() {
 
 function setOnlyFollowed(onlyFollowed) {
   if (state.onlyFollowed === onlyFollowed) return;
+  state.previewReveal = null;
   state.onlyFollowed = onlyFollowed;
   saveOnlyFollowed();
   state.nearby = null;
@@ -770,6 +786,7 @@ function setLeagues(ids) {
   const next = new Set(ids.filter((id) => LEAGUES.some((league) => league.id === id)));
   // Batch choices save and reload once. Empty or unchanged choices do nothing.
   if (!next.size || (next.size === state.enabled.size && [...next].every((id) => state.enabled.has(id)))) return;
+  state.previewReveal = null;
   state.enabled = next;
   saveEnabled();
   publish();
@@ -829,6 +846,7 @@ function start() {
 }
 function stop() {
   active = false;
+  state.previewReveal = null;
   ++loadSeq;
   clearTimeout(liveTimer);
   clearTimeout(prefetchTimer);

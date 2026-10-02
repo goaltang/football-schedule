@@ -36,9 +36,9 @@ export function FollowTeams({ state, api }: ViewProps) {
       ? dayKeyOf(new Date(next.start)) : null;
     return <div className="follow-team" key={`${record.name || record.names.join('|')}|${record.id}`}>
       <span className="follow-team-name">{name}</span>{meta && <span className="follow-team-meta">{meta}</span>}
-      {next !== undefined && (previewDay
+      {next !== undefined && (previewDay && next
         ? <button type="button" className="follow-team-next follow-preview-link" aria-label={`查看当天比赛 ${name} ${previewDay} · ${api.followNextText(next)}`}
-          onClick={() => api.gotoDay(previewDay)}>{api.followNextText(next)}</button>
+          onClick={() => api.gotoDay(previewDay, { revealMatch: { id: next.id, league: next.league } })}>{api.followNextText(next)}</button>
         : <span className="follow-team-next">{api.followNextText(next)}</span>)}
       <button type="button" className="follow-remove" data-follow-idx={index} aria-label={`取消关注 ${name}`} onClick={() => api.unfollowAt(index)}>取消关注</button>
     </div>;
