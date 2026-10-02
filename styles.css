@@ -363,6 +363,15 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   overflow-wrap: anywhere;
 }
 
+.follow-preview-link {
+  min-height: 44px; padding: 6px 8px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: transparent; color: var(--paper);
+  font-family: var(--body); text-align: left; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.follow-preview-link:hover { border-color: var(--accent); }
+
 .follow-team-name {
   flex: 1 1 0; min-width: 0; font-size: 14px; color: var(--paper);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

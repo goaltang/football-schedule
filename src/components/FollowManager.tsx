@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react';
+import { dayKeyOf } from '../../data.js';
 import type { CatalogEntry, ViewProps } from '../types';
 import { searchKey, searchTeams } from '../domain/catalog.js';
 import { leagueZh } from '../domain/format.js';
@@ -31,9 +32,14 @@ export function FollowTeams({ state, api }: ViewProps) {
     const name = api.followDisplayName(record);
     const meta = api.followMetaText(record);
     const next = state.followNext?.[index];
+    const previewDay = next && next.status !== 'CANCELLED' && next.status !== 'POSTPONED' && Number.isFinite(new Date(next.start).getTime())
+      ? dayKeyOf(new Date(next.start)) : null;
     return <div className="follow-team" key={`${record.name || record.names.join('|')}|${record.id}`}>
       <span className="follow-team-name">{name}</span>{meta && <span className="follow-team-meta">{meta}</span>}
-      {next !== undefined && <span className="follow-team-next">{api.followNextText(next)}</span>}
+      {next !== undefined && (previewDay
+        ? <button type="button" className="follow-team-next follow-preview-link" aria-label={`查看当天比赛 ${name} ${previewDay} · ${api.followNextText(next)}`}
+          onClick={() => api.gotoDay(previewDay)}>{api.followNextText(next)}</button>
+        : <span className="follow-team-next">{api.followNextText(next)}</span>)}
       <button type="button" className="follow-remove" data-follow-idx={index} aria-label={`取消关注 ${name}`} onClick={() => api.unfollowAt(index)}>取消关注</button>
     </div>;
   })}</> : <div className="follow-empty">暂无关注球队。搜索球队或点击比赛中的 ☆ 添加关注。</div>;
@@ -51,8 +57,9 @@ export function FollowManager(props: ViewProps) {
     if (!previous || previous.isConnected || document.activeElement !== document.body) return;
     const index = Math.min(Number(previous.dataset.followIdx), state.followed.length - 1);
     const next = host.current?.querySelector<HTMLButtonElement>(`[data-follow-idx="${index}"]`) || document.querySelector<HTMLButtonElement>('#followToggle');
-    next?.focus({ preventScroll: true });
+    // Clear the removed control before focus capture records the replacement.
     focused.current = null;
+    next?.focus({ preventScroll: true });
   });
   return <div className="follow-manager" id="followManager" hidden={!state.followOpen}>
     <p className="follow-head">我的关注</p><div className="follow-search">
