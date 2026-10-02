@@ -43,6 +43,7 @@ export interface Snapshot {
   tonightDays: (DayData & { dayKey: string })[] | null;
   nearby: { prev?: NearbyDay; next?: NearbyDay } | null;
   preview: { dayKey: string; kind: string; count: number; matches: Match[]; partial: boolean } | null;
+  previewReveal: { id: number; dayKey: string; matchId: string; league: string } | null;
   loading: boolean;
   error: string | null;
   followOpen: boolean;
@@ -56,7 +57,7 @@ export interface AppApi {
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => Snapshot;
   start: () => () => void;
-  gotoDay: (key: string, options?: { resetWeek?: boolean }) => void;
+  gotoDay: (key: string, options?: { resetWeek?: boolean; revealMatch?: Pick<Match, 'id' | 'league'> }) => void;
   setView: (view: 'day' | 'week' | 'tonight') => void;
   setOnlyFollowed: (onlyFollowed: boolean) => void;
   reload: (options?: { force?: boolean }) => unknown;

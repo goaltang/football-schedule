@@ -100,9 +100,48 @@ export function TonightSchedule(props: ViewProps) {
 export function ScheduleList(props: ViewProps) {
   const host = useRef<HTMLElement>(null);
   const focused = useRef<HTMLButtonElement | null>(null);
+  const interimFocused = useRef<number | null>(null);
+  const revealed = useRef<number | null>(null);
   useLayoutEffect(() => {
-    if (props.state.view === 'week') host.current?.querySelector(`#wday-${props.state.dayKey}`)?.scrollIntoView({ block: 'start' });
+    if (props.state.view === 'week' && !props.state.previewReveal) host.current?.querySelector(`#wday-${props.state.dayKey}`)?.scrollIntoView({ block: 'start' });
   }, [props.state.dayKey, props.state.view]);
+  useLayoutEffect(() => {
+    const { state } = props;
+    const request = state.previewReveal;
+    const list = host.current;
+    if (!request || !list || revealed.current === request.id || request.dayKey !== state.dayKey) return;
+    const day = state.view === 'week' ? state.weekDays?.find((day) => day.dayKey === request.dayKey) : state.data;
+    const noFollows = state.onlyFollowed && !state.followed.length;
+    const focusResult = (target: HTMLElement) => {
+      focused.current = null;
+      target.tabIndex = -1;
+      target.focus({ preventScroll: true });
+      // Instant scrolling also respects reduced motion; account for the sticky controls.
+      target.scrollIntoView({ block: target === list ? 'start' : 'center', behavior: 'instant' });
+      const controls = document.querySelector('.sticky-bar');
+      const top = controls ? controls.getBoundingClientRect().bottom + 8 : 0;
+      const offset = target.getBoundingClientRect().top - top;
+      if (offset < 0) window.scrollBy({ top: offset, behavior: 'instant' });
+    };
+    if (state.loading || (!noFollows && ((!day && !state.error) || day?.pending))) {
+      // Keep focus in a stable named region without consuming the final reveal.
+      if (interimFocused.current !== request.id) {
+        interimFocused.current = request.id;
+        focusResult(list);
+      }
+      return;
+    }
+    // Failed refreshes may retain old rows. Reveal the honest result notice instead.
+    const match = day?.matches.find((match) => match.id === request.matchId && match.league === request.league);
+    const failed = state.error || day?.error || day?.stale || match?.refreshFailed
+      || day?.failed?.includes(request.league) || day?.failed?.includes('*');
+    const rows = failed || noFollows ? [] : [...list.querySelectorAll<HTMLElement>('.match')].filter((row) =>
+      row.dataset.match === request.matchId && row.dataset.league === request.league && row.dataset.copy !== 'preview');
+    const target = rows.find((row) => row.dataset.copy === 'followed') || rows[0]
+      || list.querySelector<HTMLElement>('.panel, .warn') || list;
+    revealed.current = request.id;
+    focusResult(target);
+  });
   useLayoutEffect(() => {
     const previous = focused.current;
     if (!previous || previous.isConnected || document.activeElement !== document.body) return;
@@ -113,7 +152,7 @@ export function ScheduleList(props: ViewProps) {
     next?.focus({ preventScroll: true });
     focused.current = null;
   });
-  return <main id="list" className="list" ref={host} onFocusCapture={(event) => {
+  return <main id="list" className="list" ref={host} tabIndex={-1} aria-label="赛程结果" onFocusCapture={(event) => {
     if (event.target instanceof HTMLButtonElement) focused.current = event.target;
   }}>{props.state.view === 'tonight' ? <TonightSchedule {...props} /> : props.state.view === 'week' ? <WeekSchedule {...props} /> : <DaySchedule {...props} />}</main>;
 }

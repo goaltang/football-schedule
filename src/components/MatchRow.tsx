@@ -20,7 +20,8 @@ export function MatchRow({ match: m, state, api, compact = false, tag = false, c
   else if (m.status === 'FT') status = `完场${m.detail && m.detail !== 'FT' ? ' ' + m.detail : ''}`;
   else if (m.status === 'SCHEDULED') status = <span className="cd" data-kick={m.start} data-fallback={labels.SCHEDULED}>{countdownText(m.start, state.now) || labels.SCHEDULED}</span>;
   else status = labels[m.status] || m.status;
-  return <div className={`match st-${m.status}${compact ? ' compact' : ''}`}>
+  return <div className={`match st-${m.status}${compact ? ' compact' : ''}`} data-match={m.id} data-league={m.league} data-copy={copy}
+    tabIndex={-1} role="group" aria-label={`${leagueZh(m.league)} ${teamName(m.home)} 对 ${teamName(m.away)} ${fmtTime(m.start)}`}>
     <div className="rail"><time>{fmtTime(m.start)}</time><span className="wd">{compact ? leagueZh(m.league) : `${tag ? leagueZh(m.league) + ' · ' : ''}${periodLabel(m.start)}`}</span></div>
     <div className="side home"><span className="tname" title={m.home?.name}>{teamName(m.home)}</span>{star('home')}<Logo id={m.home?.teamId} url={m.home?.logo} /></div>
     <div className="score">{beforeKickoff ? <span className="vs">vs</span> : <><b className={`sc${m.home?.winner ? ' win' : ''}`}>{m.home?.score ?? '–'}</b><i className="dash">–</i><b className={`sc${m.away?.winner ? ' win' : ''}`}>{m.away?.score ?? '–'}</b></>}</div>
