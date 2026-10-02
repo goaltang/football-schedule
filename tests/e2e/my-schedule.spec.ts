@@ -28,6 +28,68 @@ async function matchIds(page: Page) {
   return page.locator('#list .match').evaluateAll((rows) => rows.map((row) => row.querySelector<HTMLElement>('[data-match]')?.dataset.match));
 }
 
+async function followPreviewFixtures(page: Page, status = 'SCHEDULED') {
+  await fixtures(page, { followed: [
+    { id: '360', name: 'Manchester United', names: ['manchesterunited'], leagues: ['eng.1'] },
+    { id: '359', name: 'Arsenal', names: ['arsenal'], leagues: ['eng.1'] },
+  ], events: [{
+    id: 'preview-boundary', league: 'eng.1', start: '2026-09-30T16:30:00Z', status,
+    home: { name: 'Manchester United', teamId: '360' }, away: { name: 'Leeds United', teamId: '357' },
+  }] });
+}
+
+for (const view of ['day', 'week', 'tonight'] as const) {
+  test(`follow preview navigates from ${view} to the local date across a UTC month boundary`, async ({ page }) => {
+    await followPreviewFixtures(page);
+    await page.goto('./');
+    if (view === 'week') await page.getByRole('button', { name: '按周查看' }).click();
+    if (view === 'tonight') await page.getByRole('button', { name: '今晚', exact: true }).click();
+    await page.locator('#followToggle').click();
+    const preview = page.locator('#followTeams').getByRole('button', { name: /查看当天比赛.*曼联.*2026-10-01/ });
+    await expect(preview).toContainText('10/1 00:30');
+    await preview.focus();
+    await preview.press('Enter');
+    await expect(page.locator('[data-day="2026-10-01"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: view === 'week' ? '按周查看' : '按日查看' })).toHaveAttribute('aria-pressed', 'true');
+    const section = view === 'week' ? page.locator('#wday-2026-10-01')
+      : page.locator('#list section').filter({ has: page.getByRole('heading', { name: '★ 我的关注', exact: true }) });
+    const match = section.locator('.match').filter({ has: page.locator('[data-match="preview-boundary"]') });
+    await expect(match).toBeVisible();
+    await expect(match).toContainText('曼联');
+    await expect(match).toContainText('利兹联');
+    await expect(match).toContainText('00:30');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+    const remove = page.locator('#followTeams').getByRole('button', { name: '取消关注 曼联', exact: true });
+    await remove.focus();
+    await remove.press('Enter');
+    const remaining = page.locator('#followTeams').getByRole('button', { name: '取消关注 阿森纳', exact: true });
+    await expect(remaining).toBeFocused();
+    await remaining.press('Enter');
+    await expect(page.locator('#followToggle')).toBeFocused();
+  });
+}
+
+for (const status of ['POSTPONED', 'CANCELLED']) {
+  test(`${status} and unavailable follow previews offer no date navigation`, async ({ page }) => {
+    await followPreviewFixtures(page, status);
+    await page.goto('./');
+    await page.locator('#followToggle').click();
+    const rows = page.locator('#followTeams');
+    await expect(rows.getByRole('button', { name: /查看当天比赛/ })).toHaveCount(0);
+    await expect(rows).toContainText('暂未查到赛程');
+    if (status === 'POSTPONED') {
+      await expect(rows).toContainText('延期');
+      await expect(rows).toContainText('时间待定');
+      await expect(rows).toContainText('英超');
+      await expect(rows).toContainText('利兹联');
+      await expect(rows).not.toContainText('00:30');
+      await expect(rows).not.toContainText('10/1');
+    }
+    await expect(page.locator('[data-day="2026-09-30"]')).toHaveAttribute('aria-pressed', 'true');
+  });
+}
+
 test('only-followed day and seven-day schedules are ordered, span midnight and persist', async ({ page }, testInfo) => {
   await myScheduleFixtures(page);
   const errors: string[] = [];

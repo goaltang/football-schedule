@@ -923,6 +923,49 @@ test('follow manager shows each profile next cached fixture only while open', ()
   assert.doesNotMatch(h.elements['#followTeams'].innerHTML, /follow-team-next/);
 });
 
+function followStatusPreview(events) {
+  const h = harness([['fs1.enabled', '["eng.1"]'], ['fs1.followed', JSON.stringify([
+    { id: '359', name: 'Arsenal', names: ['arsenal'], leagues: ['eng.1'] },
+  ])]], true);
+  h.advance(Date.parse('2026-09-30T04:00:00Z') - h.call('Date.now()'));
+  seedMonth(h, 'eng.1', '202610', events);
+  const requests = h.attempts();
+  h.call('toggleFollowPanel()');
+  assert.equal(h.attempts(), requests);
+  return h;
+}
+
+const previewStatusMatch = (id, status, start = '2026-10-01T12:00:00Z') => ({
+  id, league: 'eng.1', start, status,
+  home: { name: 'Arsenal', teamId: '359' }, away: { name: 'Leeds United', teamId: '357' },
+});
+
+test('cancelled fixtures are skipped in cached follow previews while remaining in the schedule', () => {
+  const h = followStatusPreview([
+    previewStatusMatch('cancelled-earlier', 'CANCELLED'),
+    previewStatusMatch('scheduled-later', 'SCHEDULED', '2026-10-01T13:00:00Z'),
+  ]);
+  assert.equal(h.call('getSnapshot().followNext[0].id'), 'scheduled-later');
+  assert.ok(h.call('cachedDayMatches(dayKeyOf(new Date("2026-10-01T12:00:00Z")), ["eng.1"]).some(m => m.id === "cancelled-earlier")'));
+});
+
+test('all-cancelled cached fixtures leave the honest unavailable follow preview', () => {
+  const h = followStatusPreview([previewStatusMatch('cancelled-only', 'CANCELLED')]);
+  assert.equal(h.call('getSnapshot().followNext[0]'), null);
+  assert.match(h.elements['#followTeams'].innerHTML, /暂未查到赛程/);
+});
+
+test('postponed follow previews retain teams and competition without promising the old kickoff', () => {
+  const postponed = previewStatusMatch('postponed', 'POSTPONED');
+  const h = followStatusPreview([postponed, previewStatusMatch('later', 'SCHEDULED', '2026-10-02T12:00:00Z')]);
+  assert.equal(h.call('getSnapshot().followNext[0].id'), 'postponed');
+  const text = h.call('followNextText(getSnapshot().followNext[0])');
+  for (const label of ['赛程预览', '延期', '时间待定', '英超', '阿森纳', '利兹联']) assert.ok(text.includes(label));
+  const oldDate = new Date(postponed.start);
+  assert.ok(!text.includes(`${oldDate.getMonth() + 1}/${oldDate.getDate()}`));
+  assert.doesNotMatch(text, /\d{2}:\d{2}/);
+});
+
 test('panel next-fixture hint advances across kickoffs without network', () => {
   const h = harness([['fs1.enabled', '["eng.1"]']], true);
   const day1 = futureDayKey(1);

@@ -397,7 +397,7 @@ function invalidateFollowNext() {
   followNextMemo = null;
 }
 
-/* 全部联赛的本地月缓存里未来的比赛（过去的一律排除，按开赛时间排序，按比赛 ID 去重） */
+/* 全部联赛的本地月缓存里未来的比赛（排除过去和取消的比赛，按开赛时间排序，按比赛 ID 去重） */
 function cachedUpcomingMatches() {
   const now = Date.now();
   const byId = new Map();
@@ -408,7 +408,7 @@ function cachedUpcomingMatches() {
     const entry = readCache(parts[2], parts[3]);
     if (!entry || !Array.isArray(entry.events)) continue;
     for (const m of entry.events) {
-      if (m && new Date(m.start).getTime() > now && !byId.has(m.id)) byId.set(m.id, m);
+      if (m && m.status !== 'CANCELLED' && new Date(m.start).getTime() > now && !byId.has(m.id)) byId.set(m.id, m);
     }
   }
   return [...byId.values()].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
@@ -427,9 +427,10 @@ function followNextList() {
 }
 
 function followNextText(m) {
-  if (!m) return '暂未查到赛程';
+  if (!m || m.status === 'CANCELLED') return '暂未查到赛程';
   const d = new Date(m.start);
-  const when = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const when = m.status === 'POSTPONED' ? '延期 · 时间待定'
+    : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   return `赛程预览：${[when, leagueZh(m.league), `${teamName(m.home)} vs ${teamName(m.away)}`].filter(Boolean).join(' · ')}`;
 }
 
