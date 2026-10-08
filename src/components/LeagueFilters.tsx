@@ -4,6 +4,7 @@ import { dayKeyOf } from '../../data.js';
 import type { ViewProps } from '../types';
 import { FollowManager } from './FollowManager';
 import { ScheduleScope } from './ScheduleScope';
+import { PanelDialog } from './PanelDialog';
 
 type LeagueGroup = 'club' | 'national';
 const groups = [
@@ -59,7 +60,6 @@ export function LeagueFilters(props: ViewProps) {
   const [activeGroup, setActiveGroup] = useState<LeagueGroup>(() =>
     groups[0].items.some((league) => state.enabled.has(league.id)) ? 'club' : 'national');
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const toggleRef = useRef<HTMLButtonElement>(null);
   const selected = LEAGUES.filter((league) => state.enabled.has(league.id));
   const selectedNames = selected.map((league) => league.zh).join(' · ');
   const activePreset = presets.find((preset) => matchesSelection(preset.ids, state.enabled));
@@ -77,18 +77,10 @@ export function LeagueFilters(props: ViewProps) {
     tabRefs.current[next]?.focus();
   }
 
-  function closeFromKeyboard(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key !== 'Escape' || !state.filtersOpen) return;
-    event.preventDefault();
-    event.stopPropagation();
-    api.toggleFilters();
-    toggleRef.current?.focus();
-  }
-
   return <div className={`filters${state.filtersOpen ? ' is-open' : ''}`}>
     <div className="filter-toolbar">
-      <button type="button" className="filter-toggle" id="filterToggle" ref={toggleRef} aria-controls="chips"
-        aria-expanded={state.filtersOpen} aria-label={`赛事筛选，已选 ${selected.length} 项，${state.filtersOpen ? '收起' : '展开'}`}
+      <button type="button" className="filter-toggle" id="filterToggle" aria-controls="chips" aria-haspopup="dialog"
+        aria-expanded={state.filtersOpen} aria-label={`赛事筛选，已选 ${selected.length} 项`}
         onClick={api.toggleFilters}>
         <span className="filter-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
           <path d="M4 7h4m4 0h8M4 17h8m4 0h4" /><circle cx="10" cy="7" r="2" /><circle cx="14" cy="17" r="2" />
@@ -97,7 +89,7 @@ export function LeagueFilters(props: ViewProps) {
           <span className="filter-toggle-title">赛事筛选 <span className="filter-count" id="filterCount">已选 {selected.length}</span></span>
           <span className="filter-summary" title={selectedNames}>{summary}</span>
         </span>
-        <span className="filter-toggle-text" aria-hidden="true">{state.filtersOpen ? '收起' : '调整'}</span>
+        <span className="filter-toggle-text" aria-hidden="true">调整</span>
       </button>
       <div className="secondary-actions">
         <div className="schedule-controls">
@@ -114,11 +106,19 @@ export function LeagueFilters(props: ViewProps) {
               aria-pressed={state.view === 'tonight'} aria-controls="list" onClick={() => api.setView('tonight')}>今晚</button>
           </div>
           <button className={`btn refresh${state.loading ? ' busy' : ''}`} id="refresh" aria-busy={state.loading} onClick={() => api.reload({ force: true })}>刷新</button>
-          <button type="button" className="btn follow-toggle" id="followToggle" aria-controls="followManager" aria-expanded={state.followOpen} onClick={api.toggleFollowPanel}>关注 <span className="follow-count" id="followCount">{state.followed.length || ''}</span></button>
+          <button type="button" className="btn follow-toggle" id="followToggle" aria-controls="followManager" aria-haspopup="dialog" aria-expanded={state.followOpen} onClick={api.toggleFollowPanel}>关注 <span className="follow-count" id="followCount">{state.followed.length || ''}</span></button>
         </div>
       </div>
     </div>
-    <div className="chips" id="chips" hidden={!state.filtersOpen} onKeyDown={closeFromKeyboard}>
+    <PanelDialog id="chips" open={state.filtersOpen} title="赛事筛选" summary={`已选 ${selected.length} 项赛事`}
+      returnFocusId="filterToggle" onClose={api.toggleFilters} footer={<>
+        {state.onlyFollowed && <p className="filter-scope-note">当前只看关注，切换到全部比赛后可查看所选赛事。</p>}
+        <div className="filter-panel-foot">
+          <p id="filterHelp">选择即生效 · 自动保存 · 至少保留 1 项</p>
+          <button type="button" className="filter-done" onClick={api.toggleFilters}>完成</button>
+        </div>
+      </>}>
+      <div className="chips">
       <div className="filter-presets" role="group" aria-label="快捷选择赛事">
         {presets.map((preset) => <button type="button" className="filter-preset" key={preset.label}
           aria-pressed={matchesSelection(preset.ids, state.enabled)} onClick={() => {
@@ -135,12 +135,8 @@ export function LeagueFilters(props: ViewProps) {
         </button>)}
       </div>
       <LeagueChips {...props} activeGroup={activeGroup} />
-      <div className="filter-panel-foot">
-        <p id="filterHelp">选择即生效 · 自动保存 · 至少保留 1 项</p>
-        <button type="button" className="filter-done" onClick={() => { api.toggleFilters(); toggleRef.current?.focus(); }}>完成</button>
       </div>
-      {state.onlyFollowed && <p className="filter-scope-note">当前只看关注，切换到全部比赛后可查看所选赛事。</p>}
-    </div>
+    </PanelDialog>
     <FollowManager {...props} />
   </div>;
 }

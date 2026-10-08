@@ -3,7 +3,7 @@ import { LEAGUES } from '../../config.js';
 import { fixtures } from './fixtures';
 
 async function openFilters(page: Page) {
-  const toggle = page.getByRole('button', { name: /赛事筛选/ });
+  const toggle = page.getByRole('button', { name: /^赛事筛选/ });
   if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
   await expect(page.locator('#chips')).toBeVisible();
 }
@@ -23,7 +23,7 @@ test('quick choices show the selected combination and persist after closing and 
   await expect(page.locator('.filter-summary')).toHaveText('五大联赛');
   await page.getByRole('button', { name: '完成', exact: true }).click();
   await expect(page.locator('#chips')).toBeHidden();
-  await expect(page.getByRole('button', { name: /赛事筛选/ })).toBeFocused();
+  await expect(page.getByRole('button', { name: /^赛事筛选/ })).toBeFocused();
   await page.reload();
   await expect(page.locator('.filter-summary')).toHaveText('五大联赛');
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('fs1.enabled')!))).toEqual(['eng.1', 'esp.1', 'ger.1', 'ita.1', 'fra.1']);
@@ -74,7 +74,7 @@ test('category keyboard navigation changes no preferences and Escape restores fo
   await expect(national).toBeFocused();
   await national.press('Escape');
   await expect(page.locator('#chips')).toBeHidden();
-  await expect(page.getByRole('button', { name: /赛事筛选/ })).toBeFocused();
+  await expect(page.getByRole('button', { name: /^赛事筛选/ })).toBeFocused();
 });
 
 test('both categories fit narrow and wide screens with usable touch targets', async ({ page }) => {

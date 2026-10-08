@@ -92,6 +92,7 @@ for (const view of ['day', 'week', 'tonight'] as const) {
     // Subsequent controller ticks must leave the user's new focus and scroll alone.
     await page.locator('#followToggle').click();
     await expect(page.getByRole('searchbox')).toHaveValue('曼联');
+    await page.getByRole('searchbox').focus();
     await expect(page.getByRole('searchbox')).toBeFocused();
     const scroll = await page.evaluate(() => scrollY);
     await page.clock.runFor(60_000);
@@ -103,6 +104,8 @@ for (const view of ['day', 'week', 'tonight'] as const) {
     const remaining = page.locator('#followTeams').getByRole('button', { name: '取消关注 阿森纳', exact: true });
     await expect(remaining).toBeFocused();
     await remaining.press('Enter');
+    await expect(page.getByRole('searchbox')).toBeFocused();
+    await page.getByRole('button', { name: '完成', exact: true }).click();
     await expect(page.locator('#followToggle')).toBeFocused();
   });
 }
@@ -171,13 +174,6 @@ for (const outcome of ['match', 'empty', 'failed'] as const) {
       const target = page.locator('#list .match[data-match="delayed-preview"][data-league="eng.1"][data-copy="followed"]');
       await expect(target).toHaveCount(1);
       await expect(target).not.toBeFocused();
-      if (outcome === 'match') {
-        // Another publication while waiting must not repeat interim focus.
-        const filters = page.getByRole('button', { name: /赛事筛选/ });
-        await filters.focus();
-        await filters.press('Enter');
-        await expect(filters).toBeFocused();
-      }
       pending.release();
       await expect(page.locator('#updated')).not.toContainText('更新中');
       if (outcome === 'match') await expectRevealed(target);
@@ -239,6 +235,7 @@ test('reopening the manager during preview loading preserves search focus, text 
     await expect(page.getByRole('main', { name: '赛程结果', exact: true })).toBeFocused();
     await page.locator('#followToggle').click();
     const search = page.getByRole('searchbox');
+    await search.focus();
     await expect(search).toBeFocused();
     await search.fill('ars');
     await expect(page.locator('#followResults')).toContainText('未找到「ars」');
@@ -253,6 +250,31 @@ test('reopening the manager during preview loading preserves search focus, text 
     await expect(search).toHaveValue('ars');
     await expect(search).toBeFocused();
     expect(await page.evaluate(() => scrollY)).toBe(scroll);
+  } finally {
+    pending.release();
+  }
+});
+
+test('opening filters during preview loading cancels late result focus and scroll', async ({ page }) => {
+  const pending = await delayedPreviewFixtures(page);
+  try {
+    await page.goto('./');
+    await page.locator('#followToggle').click();
+    await page.locator('#followTeams').getByRole('button', { name: /查看当天比赛.*曼联.*2026-10-06/ }).click();
+    await pending.requested;
+    await expect(page.getByRole('main', { name: '赛程结果', exact: true })).toBeFocused();
+    await page.locator('#filterToggle').click();
+    const title = page.getByRole('dialog', { name: '赛事筛选', exact: true }).getByRole('heading');
+    await expect(title).toBeFocused();
+    const scroll = await page.evaluate(() => scrollY);
+    pending.release();
+    await expect(page.locator('#updated')).not.toContainText('更新中');
+    await expect(title).toBeFocused();
+    expect(await page.evaluate(() => scrollY)).toBe(scroll);
+    await page.getByRole('button', { name: '完成', exact: true }).click();
+    await expect(page.locator('#filterToggle')).toBeFocused();
+    await page.clock.runFor(60_000);
+    await expect(page.locator('#filterToggle')).toBeFocused();
   } finally {
     pending.release();
   }
@@ -357,6 +379,7 @@ test('empty follows guide the user through search and return to guidance after r
   await page.getByRole('button', { name: '只看关注', exact: true }).click();
   await expect(page.locator('#list')).toContainText('还没有关注球队');
   await page.getByRole('button', { name: '添加关注球队', exact: true }).click();
+  await page.getByRole('searchbox').focus();
   await expect(page.getByRole('searchbox')).toBeFocused();
   await page.getByRole('searchbox').fill('曼联');
   await page.locator('#followResults').getByRole('button', { name: '关注 曼联', exact: true }).click();
@@ -364,6 +387,7 @@ test('empty follows guide the user through search and return to guidance after r
   await page.locator('#followTeams').getByRole('button', { name: '取消关注 曼联', exact: true }).click();
   await expect(page.locator('#list')).toContainText('还没有关注球队');
   await expect(page.locator('#list .match')).toHaveCount(0);
+  await page.getByRole('button', { name: '完成', exact: true }).click();
   await page.getByRole('button', { name: '查看全部比赛', exact: true }).click();
   await expect(page.getByRole('button', { name: '只看关注', exact: true })).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('#list .match')).toHaveCount(1);
