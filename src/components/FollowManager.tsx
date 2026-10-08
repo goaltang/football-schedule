@@ -4,6 +4,7 @@ import type { CatalogEntry, ViewProps } from '../types';
 import { searchKey, searchTeams } from '../domain/catalog.js';
 import { leagueZh } from '../domain/format.js';
 import { Logo } from './Logo';
+import { PanelDialog } from './PanelDialog';
 
 export function SearchResults({ state, api }: ViewProps) {
   const search = state.search;
@@ -50,25 +51,30 @@ export function FollowManager(props: ViewProps) {
   const searchInput = useRef<HTMLInputElement>(null);
   const focused = useRef<HTMLButtonElement | null>(null);
   useLayoutEffect(() => {
-    if (state.followOpen) searchInput.current?.focus();
-  }, [state.followOpen]);
-  useLayoutEffect(() => {
+    if (!state.followOpen) { focused.current = null; return; }
     const previous = focused.current;
-    if (!previous || previous.isConnected || document.activeElement !== document.body) return;
+    if (!previous || previous.isConnected || (document.activeElement !== document.body && document.activeElement?.id !== 'followManager')) return;
     const index = Math.min(Number(previous.dataset.followIdx), state.followed.length - 1);
-    const next = host.current?.querySelector<HTMLButtonElement>(`[data-follow-idx="${index}"]`) || document.querySelector<HTMLButtonElement>('#followToggle');
+    const next = host.current?.querySelector<HTMLButtonElement>(`[data-follow-idx="${index}"]`) || searchInput.current;
     // Clear the removed control before focus capture records the replacement.
     focused.current = null;
     next?.focus({ preventScroll: true });
   });
-  return <div className="follow-manager" id="followManager" hidden={!state.followOpen}>
-    <p className="follow-head">我的关注</p><div className="follow-search">
+  return <PanelDialog id="followManager" open={state.followOpen} title="我的关注" summary={`${state.followed.length} 支球队 · 关注自动保存在本机`}
+    variant="drawer" returnFocusId="followToggle" desktopFocusId="followSearch" restoreFocus={!state.previewReveal}
+    onClose={api.toggleFollowPanel} footer={<div className="filter-panel-foot">
+      <p>在比赛中点 ☆，也可以添加关注</p>
+      <button type="button" className="filter-done" onClick={api.toggleFollowPanel}>完成</button>
+    </div>}>
+    <div className="follow-manager"><div className="follow-search">
       <input ref={searchInput} type="search" id="followSearch" className="search-input" placeholder="搜索球队：皇马、国足、阿根廷…" aria-label="搜索俱乐部或国家队并关注" aria-controls="followResults" autoComplete="off" spellCheck={false} enterKeyHint="search"
         value={state.search.query} onChange={(event) => api.setSearchQuery(event.target.value)} onFocus={() => api.loadCatalog()} />
       <div className="search-results" id="followResults" aria-live="polite"><SearchResults {...props} /></div>
-    </div><div className="follow-teams" id="followTeams" ref={host} onFocusCapture={(event) => {
+    </div><p className="follow-head">已关注球队 <span>{state.followed.length}</span></p>
+    <div className="follow-teams" id="followTeams" ref={host} onFocusCapture={(event) => {
       const target = event.target;
       if (target instanceof HTMLButtonElement && target.dataset.followIdx !== undefined) focused.current = target;
     }}><FollowTeams {...props} /></div>
-  </div>;
+    </div>
+  </PanelDialog>;
 }

@@ -46,7 +46,7 @@ const state = {
   loading: false,
   error: null,
   followOpen: false,
-  filtersOpen: Boolean(window.matchMedia?.('(min-width: 641px)').matches),
+  filtersOpen: false,
 };
 
 let liveTimer = null;
@@ -452,7 +452,10 @@ function followMetaText(rec) {
 
 function toggleFollowPanel() {
   state.followOpen = !state.followOpen;
-  if (state.followOpen) state.previewReveal = null;
+  if (state.followOpen) {
+    state.filtersOpen = false;
+    state.previewReveal = null;
+  }
   invalidateFollowNext();
   publish();
 }
@@ -799,7 +802,15 @@ function toggleLeague(id) {
   else next.add(id);
   setLeagues([...next]);
 }
-function toggleFilters() { state.filtersOpen = !state.filtersOpen; publish(); }
+function toggleFilters() {
+  state.filtersOpen = !state.filtersOpen;
+  if (state.filtersOpen) {
+    state.followOpen = false;
+    state.previewReveal = null;
+    invalidateFollowNext();
+  }
+  publish();
+}
 function setSearchQuery(query) {
   search.query = query;
   if (searchKey(query)) loadCatalog();

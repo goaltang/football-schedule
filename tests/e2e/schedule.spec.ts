@@ -22,19 +22,13 @@ test('date navigation, week view and persisted follows work in the built app', a
   await expect(page.locator('#heroDate')).toHaveText('09.30');
   expect(errors).toEqual([]);
 });
-test('filters retain keyboard focus and followed matches from a disabled competition', async ({ page }, testInfo) => {
+test('filters retain keyboard focus and followed matches from a disabled competition', async ({ page }) => {
   await fixtures(page);
   await page.goto('./');
   await page.getByRole('button', { name: '关注曼联', exact: true }).click();
-  const toggle = page.getByRole('button', { name: /赛事筛选/ });
+  const toggle = page.getByRole('button', { name: /^赛事筛选/ });
   await expect(toggle).toBeVisible();
-  const initiallyOpen = testInfo.project.name !== 'mobile';
-  await expect(toggle).toHaveAttribute('aria-expanded', String(initiallyOpen));
-  if (initiallyOpen) {
-    await expect(page.locator('#chips')).toBeVisible();
-    await toggle.click();
-    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  }
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator('#chips')).toBeHidden();
   await toggle.focus();
   await toggle.press('Enter');
@@ -47,7 +41,7 @@ test('filters retain keyboard focus and followed matches from a disabled competi
   await expect(league).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByRole('heading', { name: '★ 我的关注' })).toBeVisible();
   await expect(page.locator('#list .match')).toHaveCount(1);
-  await toggle.click();
+  await page.getByRole('button', { name: '完成', exact: true }).click();
   await expect(page.locator('#chips')).toBeHidden();
   await toggle.click();
   await expect(league).toHaveAttribute('aria-pressed', 'false');
@@ -62,6 +56,8 @@ test('team search, follow removal focus and preferences survive reload', async (
   await expect(page.locator('#followTeams')).toContainText('中国');
   await expect(page.getByRole('searchbox')).toHaveValue('国足');
   await page.locator('#followTeams').getByRole('button', { name: '取消关注 中国', exact: true }).click();
+  await expect(page.getByRole('searchbox')).toBeFocused();
+  await page.getByRole('button', { name: '完成', exact: true }).click();
   await expect(page.locator('#followToggle')).toBeFocused();
   await expect(page.locator('#followCount')).toHaveText('');
   await page.reload();
