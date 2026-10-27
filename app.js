@@ -364,18 +364,35 @@ function dayDotState(dayKey) {
    只看开赛后 3 小时内，延期/未更新的比赛不会永远轮询。 */
 const KICKOFF_GRACE_MS = 3 * 3600e3;
 
-function kickoffPassed() {
+/* 直播轮询和开球重验只重取有需要的赛事：整页刷新会把 20 多个赛事的整月数据
+   每分钟重下一遍（月租数据约 300KB/分钟），对手机流量和接口都不友好。 */
+function leaguesOf(matches, predicate) {
+  const leagues = new Set();
+  for (const m of matches) if (m && m.league && predicate(m)) leagues.add(m.league);
+  return [...leagues];
+}
+
+function livePollLeagues() {
+  return leaguesOf(currentMatches(), (m) => m.live);
+}
+
+function kickoffLeagues() {
   const now = Date.now();
-  return currentMatches().some((m) => {
-    if (!m || m.status !== 'SCHEDULED') return false;
+  return leaguesOf(currentMatches(), (m) => {
+    if (m.status !== 'SCHEDULED') return false;
     const t = new Date(m.start).getTime();
     return Number.isFinite(t) && t <= now && now - t < KICKOFF_GRACE_MS;
   });
 }
 
+function kickoffPassed() {
+  return kickoffLeagues().length > 0;
+}
+
 function refreshIfKickoffPassed() {
-  if (document.hidden || state.loading || !kickoffPassed()) return;
-  reload({ force: true });
+  if (document.hidden || state.loading) return;
+  const leagues = kickoffLeagues();
+  if (leagues.length) reload({ force: true, refreshLeagues: leagues });
 }
 
 function minuteTick() {
@@ -520,6 +537,7 @@ async function reload(opts = {}) {
   try {
     const data = await loadDayVisible(state.dayKey, {
       force: opts.force,
+      refreshLeagues: opts.refreshLeagues,
       onUpdate: (fresh) => {
         /* 后台重验完成：静默替换为新数据 */
         if (seq !== loadSeq || state.dayKey !== fresh.dayKey) return;
@@ -574,6 +592,7 @@ async function reloadRange(view, opts = {}) {
       try {
         const d = await loadDayVisible(key, {
           force: opts.force,
+          refreshLeagues: opts.refreshLeagues,
           onUpdate: (fresh) => {
             /* 后台重验完成：把该天替换为新数据 */
             if (seq !== loadSeq || state.view !== view) return;
@@ -628,8 +647,12 @@ function currentMatches() {
 function scheduleLivePoll() {
   clearTimeout(liveTimer);
   if (!active || document.hidden) return;
-  const hasLive = currentMatches().some((m) => m.live);
-  if (hasLive) liveTimer = setTimeout(() => reload({ force: true }), LIVE_POLL_MS);
+  if (!livePollLeagues().length) return;
+  liveTimer = setTimeout(() => {
+    /* 触发时重新算一遍：期间可能已有比赛完场或被筛掉 */
+    const leagues = livePollLeagues();
+    if (leagues.length) reload({ force: true, refreshLeagues: leagues });
+  }, LIVE_POLL_MS);
 }
 
 /* 预取日期条：把窗口 7 天涉及的「联赛×月份」全部暖机（数据层按月缓存，天然去重）。
