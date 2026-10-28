@@ -77,6 +77,30 @@ npm run test:e2e
   过期缓存先展示并提示信息可能不完整，后台静默更新。弱网无缓存时首屏最多等 25 秒；
   数据仍不可用则显示“重试”，不会将未取得数据误判为休赛。
 
+## 加进日历
+
+关注面板里每支球队右侧有一个日历按钮：可以把这支球队的赛程订阅到手机或电脑日历，也可以只导出一份 .ics。
+
+- **订阅（推荐）**：iPhone / iPad / Mac 点“在日历应用里打开”，确认订阅即可；安卓和电脑复制“订阅地址”，
+  在 Google 日历网页版“其他日历 → 从网址添加”，或在 Outlook 里粘贴地址。
+  订阅后比赛改期、延期、取消会自动同步，不用再打开网站。
+- **只导出这一次**：下载 .ics 导入，之后不会自动更新；面板底部“导出全部关注”会把所有已关注球队合成一份文件。
+- 一支球队一个文件 `ics/<teamId>.ics`，地址里只有 ESPN 的公开球队编号，不包含关注列表，
+  所以订阅多支球队不会把“你喜欢谁”一次性交给日历服务商。
+- 订阅范围与赛程快照一致：未来约两个月，随快照更新向前滚动，只保留还没结束的比赛。
+  日历里的比赛会按 UID 稳定更新，不会因为重新生成而重复。
+- 默认开赛前 30 分钟提醒，可在日历里修改；已取消和延期的比赛不设提醒，标题分别加“已取消”“延期”。
+- 日历客户端自己决定刷新时间（iOS 约 1 小时到 1 天，Google 日历 8–24 小时），改期可能延迟数小时才出现；
+  这条也写在弹窗里，避免被当成故障。
+
+生成方式：`npm run build` 时由 `tools/build-ics.js` 从 `snapshot/schedule.json` 生成 `dist/ics/`（约 300 个文件、1.7 MB，
+不进仓库，3 小时一次的快照提交不会因此膨胀）。本地检查可运行 `npm run ics` 生成到 `dist/ics`，
+或 `npm run preview` 后直接访问 `/football-schedule/ics/359.ics`；开发服务器按需现算，不落盘。
+`SITE_URL` 环境变量可覆盖日历描述里的站点地址，默认 `https://goaltang.github.io/football-schedule/`。
+
+部署后请用 `curl -I https://goaltang.github.io/football-schedule/ics/359.ics` 确认 Content-Type；
+客户端更依赖文件内容和 `.ics` 后缀，但仍建议发布后验一次。
+
 ## 手机上用 / PWA
 
 已部署上线：**https://goaltang.github.io/football-schedule/**
@@ -131,7 +155,9 @@ PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生
 | `data.js` | 数据层：ESPN 抓取、归一化、按月缓存、时区分桶、空日就近搜索 |
 | `app.js` | 状态、动作、加载顺序、轮询和偏好同步 |
 | `src/components/` | 日期栏、赛事筛选、关注管理、赛程列表及比赛行 |
-| `src/domain/` | 关注匹配、球队搜索和日期格式 |
+| `src/domain/` | 关注匹配、球队搜索、日期格式和 iCalendar 拼装（`ics.js`） |
+| `src/components/CalendarDialog.tsx` | “加进日历”弹窗与导出全部关注 |
+| `tools/build-ics.js` | 从快照生成 `dist/ics/*.ics` 与球队索引，构建和开发服务器共用 |
 | `src/types.ts` | 界面与数据接口的 TypeScript 类型 |
 | `vite.config.ts` | 构建、静态资源与 PWA 缓存清单 |
 | `manifest.webmanifest` / `icons/` | PWA 清单与应用图标（安装到手机主屏用） |
