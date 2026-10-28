@@ -430,6 +430,68 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 .follow-remove:hover { color: var(--live); border-color: color-mix(in srgb, var(--live) 50%, transparent); }
 
+/* 订阅到日历：图标按钮，和“取消关注”同高，避免手机上误触 */
+.follow-cal {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; padding: 0;
+  border: 1px solid var(--line); border-radius: 6px; background: transparent;
+  color: var(--muted); cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.follow-cal svg { width: 19px; height: 19px; }
+.follow-cal:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.follow-cal:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.foot-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cal-export { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.cal-export-btn {
+  min-height: 32px; padding: 0; border: 0; background: transparent;
+  color: var(--filter-accent); font-family: var(--body); font-size: 11.5px;
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.cal-export-btn:disabled { color: var(--filter-muted); text-decoration: none; cursor: default; }
+.cal-export-note { color: var(--filter-muted); font-size: 11px; }
+
+/* ---------- 加进日历 ---------- */
+
+.cal-body { display: flex; flex-direction: column; gap: 12px; }
+.cal-note { padding: 8px 0; color: var(--muted); font-size: 13px; }
+.cal-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 46px; padding: 0 16px; border-radius: 8px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 14px; font-weight: 600; text-decoration: none;
+}
+.cal-primary svg { width: 18px; height: 18px; }
+.cal-hint { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.cal-field { display: flex; flex-direction: column; gap: 6px; }
+.cal-field > span:first-child { color: var(--filter-muted); font-size: 11.5px; }
+.cal-copy-row { display: flex; gap: 8px; }
+.cal-url {
+  flex: 1 1 auto; min-width: 0; min-height: 40px; padding: 0 10px;
+  border: 1px solid var(--line-soft); border-radius: 6px;
+  background: transparent; color: var(--paper);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px;
+}
+.cal-url:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cal-copy {
+  flex: none; min-width: 64px; min-height: 40px; padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--card)); color: var(--filter-accent);
+  font-family: var(--body); font-size: 12.5px; cursor: pointer;
+}
+.cal-notes {
+  display: flex; flex-direction: column; gap: 4px;
+  padding-left: 16px; color: var(--muted); font-size: 12px; line-height: 1.6;
+}
+.cal-notes li { list-style: disc; }
+.cal-download {
+  align-self: flex-start; min-height: 40px; padding: 0;
+  border: 0; background: transparent; color: var(--muted);
+  font-family: var(--body); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.cal-download:disabled { text-decoration: none; cursor: default; }
+
 .follow-empty {
   display: flex; align-items: center; justify-content: center;
   min-height: 44px; padding: 8px 0;

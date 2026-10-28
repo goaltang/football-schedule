@@ -47,6 +47,8 @@ const state = {
   error: null,
   followOpen: false,
   filtersOpen: false,
+  calendarOpen: false,
+  calendarIndex: null,
 };
 
 let liveTimer = null;
@@ -455,8 +457,27 @@ function toggleFollowPanel() {
   if (state.followOpen) {
     state.filtersOpen = false;
     state.previewReveal = null;
+  } else {
+    /* 面板收起时套在上面的日历弹窗一起关闭，不留孤立的模态 */
+    state.calendarOpen = false;
+    state.calendarIndex = null;
   }
   invalidateFollowNext();
+  publish();
+}
+
+/* 关注面板里的某一支球队 -> “加进日历”弹窗；只记索引，订阅地址由组件按需取 */
+function openCalendar(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= state.followed.length) return;
+  state.calendarIndex = index;
+  state.calendarOpen = true;
+  publish();
+}
+
+function closeCalendar() {
+  if (!state.calendarOpen && state.calendarIndex == null) return;
+  state.calendarOpen = false;
+  state.calendarIndex = null;
   publish();
 }
 
@@ -762,6 +783,11 @@ let snapshot;
 let active = false;
 let countdownTimer = null;
 function publish() {
+  /* 关注列表被其他标签页改短时，别让弹窗指着不存在的球队 */
+  if (state.calendarIndex != null && !state.followed[state.calendarIndex]) {
+    state.calendarOpen = false;
+    state.calendarIndex = null;
+  }
   let preview = state.preview;
   if (state.onlyFollowed && preview) {
     preview = displayedDay(preview);
@@ -870,6 +896,6 @@ function stop() {
 loadPrefs();
 publish();
 export { subscribe, getSnapshot, start, stop, gotoDay, setView, setOnlyFollowed, reload, toggleLeague, setLeagues, toggleFilters,
-  toggleFollow, unfollowAt, toggleFollowPanel, setSearchQuery, loadCatalog, followSearchResult,
+  toggleFollow, unfollowAt, toggleFollowPanel, openCalendar, closeCalendar, setSearchQuery, loadCatalog, followSearchResult,
   isFollowed, matchHasFollowed, dayDotState, followDisplayName, followMetaText, followNextText,
   scheduleStatus, scheduleNotice, UI_TEXT, STATUS_LABEL, DAY_DOT_TEXT, STRIP_LEN };

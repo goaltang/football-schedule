@@ -12,6 +12,8 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { tsImport } from 'tsx/esm/api';
 import { tonightDayKey, tonightRange, summarizeTonight } from '../src/domain/tonight.js';
+import { calendarBlock, eventBlock, mergeCalendars } from '../src/domain/ics.js';
+import { buildCalendars } from '../tools/build-ics.js';
 const { Hero } = await tsImport('../src/components/Hero.tsx', import.meta.url);
 const { DateBar } = await tsImport('../src/components/DateBar.tsx', import.meta.url);
 const { LeagueChips, LeagueFilters } = await tsImport('../src/components/LeagueFilters.tsx', import.meta.url);
@@ -1994,4 +1996,74 @@ test('removing one follow also removes its retained empty-day preview immediatel
   assert.deepEqual([...h.call('getSnapshot().preview.matches.map((m) => m.id)')], ['united']);
   assert.equal(h.call('getSnapshot().preview.count'), 1);
   assert.doesNotMatch(h.elements['#list'].innerHTML, /阿森纳/);
+});
+
+test('calendar files fold to 75 octets, use CRLF and escape text values', () => {
+  const ics = calendarBlock({
+    name: '赛程 · 托特纳姆热刺足球俱乐部与英格兰国家队联合订阅日历',
+    events: [{
+      uid: 'e1@football-schedule', stamp: Date.parse('2026-09-30T12:00:00Z'),
+      start: Date.parse('2026-09-30T19:00:00Z'), title: 'A,B; C\\D\nE', description: '英超 · 托特纳姆热刺 vs 阿森纳',
+    }],
+  });
+  for (const line of ics.split('\r\n')) assert.ok(Buffer.byteLength(line, 'utf8') <= 75, `line too long: ${line}`);
+  assert.ok(!/[^\r]\n/.test(ics), 'only CRLF line endings');
+  assert.ok(ics.endsWith('END:VCALENDAR\r\n'));
+  assert.match(ics, /SUMMARY:A\\,B\\; C\\\\D\\nE/);
+  assert.match(ics, /DTSTART:20260930T190000Z/);
+  assert.match(ics, /X-WR-CALNAME:赛程 · 托特纳姆热刺/);
+});
+
+test('cancelled and postponed matches keep their UID but drop the alarm', () => {
+  const base = { uid: '401879288@football-schedule', stamp: 1790000000000, start: Date.parse('2026-10-01T12:00:00Z'), title: '阿森纳 vs 切尔西', alarmMinutes: 30 };
+  const confirmed = eventBlock(base);
+  assert.match(confirmed, /STATUS:CONFIRMED/);
+  assert.match(confirmed, /TRIGGER:-PT30M/);
+  assert.match(confirmed, /UID:401879288@football-schedule/);
+  const cancelled = eventBlock({ ...base, status: 'CANCELLED' });
+  assert.match(cancelled, /STATUS:CANCELLED/);
+  assert.match(cancelled, /SUMMARY:\[已取消\] 阿森纳 vs 切尔西/);
+  assert.doesNotMatch(cancelled, /VALARM/);
+  const postponed = eventBlock({ ...base, status: 'POSTPONED' });
+  assert.match(postponed, /STATUS:TENTATIVE/);
+  assert.match(postponed, /\[延期\]/);
+  assert.doesNotMatch(postponed, /VALARM/);
+  assert.match(postponed, /UID:401879288@football-schedule/);
+});
+
+test('team calendars only carry that team\'s upcoming matches and stay identical between builds', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ics-'));
+  const snapshot = path.join(dir, 'schedule.json');
+  const now = Date.parse('2026-09-30T12:00:00Z');
+  const side = (name, teamId) => ({ name, teamId });
+  const match = (id, start, home, away, status = 'SCHEDULED') => ({ id, league: 'eng.1', start, status, home, away });
+  fs.writeFileSync(snapshot, JSON.stringify({ generatedAt: now, months: {
+    'eng.1|202609': { fetchedAt: now, league: { id: 'eng.1' }, events: [
+      match('m1', '2026-09-29T19:00:00Z', side('Arsenal', '359'), side('Chelsea', '363')),
+      match('m2', '2026-10-03T14:00:00Z', side('Arsenal', '359'), side('Chelsea', '363')),
+      match('m3', '2026-10-05T14:00:00Z', side('Chelsea', '363'), side('Liverpool', '364'), 'POSTPONED'),
+    ] },
+  } }));
+  const first = buildCalendars({ snapshotPath: snapshot, now, siteUrl: 'https://example.test/' });
+  const later = buildCalendars({ snapshotPath: snapshot, now: now + 60000, siteUrl: 'https://example.test/' });
+  assert.deepEqual([...first.files.keys()].sort(), ['359.ics', '363.ics', '364.ics']);
+  const arsenal = first.files.get('359.ics');
+  assert.equal((arsenal.match(/BEGIN:VEVENT/g) || []).length, 1, 'past matches are dropped');
+  assert.match(arsenal, /SUMMARY:阿森纳 vs 切尔西/);
+  assert.match(arsenal, /LOCATION:英超 · 主场/);
+  assert.match(arsenal, /X-WR-CALNAME:赛程 · 阿森纳/);
+  const chelsea = first.files.get('363.ics');
+  assert.equal((chelsea.match(/BEGIN:VEVENT/g) || []).length, 2);
+  assert.match(chelsea, /STATUS:TENTATIVE/);
+  assert.equal(arsenal, later.files.get('359.ics'), 'a new build from the same snapshot keeps event times stable');
+  const entry = first.index.teams.find((team) => team.id === '359');
+  assert.deepEqual({ zh: entry.zh, count: entry.count, keys: entry.keys }, { zh: '阿森纳', count: 1, keys: ['arsenal'] });
+});
+
+test('exporting follows merges calendars without duplicating shared matches', () => {
+  const one = (uid) => calendarBlock({ name: '赛程 · 测试', events: [{ uid, stamp: 1, start: 1790000000000, title: 'A vs B' }] });
+  const merged = mergeCalendars([one('shared@x'), one('shared@x'), one('unique@x')], { name: '赛程 · 我的关注' });
+  assert.equal((merged.match(/BEGIN:VCALENDAR/g) || []).length, 1);
+  assert.equal((merged.match(/BEGIN:VEVENT/g) || []).length, 2);
+  assert.match(merged, /X-WR-CALNAME:赛程 · 我的关注/);
 });
