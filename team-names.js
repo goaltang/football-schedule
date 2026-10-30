@@ -181,18 +181,20 @@ const TEAM_SEARCH_ALIASES = {
 };
 
 /* 名称归一化：忽略大小写、音调、标点、FC/AS/SK 之类的俱乐部前后缀，
- * 让 "1. FC Union Berlin" 与 "Union Berlin"、"Atlético" 与 "Atletico" 命中同一条 */
+ * 让 "1. FC Union Berlin" 与 "Union Berlin"、"Atlético" 与 "Atletico" 命中同一条。
+ * 后缀必须带着分隔符一起剥离：压缩成 "shanghaishenhuafc" 后，左起匹配的 "afc"
+ * 会把 "Shenhua" 结尾的 a 吃掉，导致 "Shanghai Shenhua FC" 归一到 "shanghaishenhu"。 */
 const ZH_PREFIX = /^(fc|afc|cf|cd|sc|ac|as|ss|us|rc|rcd|aj|sk|nk|tsg|sv|vfl|vfb|bsc|1fc)/;
-const ZH_SUFFIX = /(fc|afc|cf|sc|fk|club)$/;
+const ZH_SUFFIX = /[\s.]+(?:afc|fc|cf|sc|fk|club)$/;
 
 function normalizeTeamName(name) {
   return String(name)
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
+    .replace(ZH_SUFFIX, '')
     .replace(/[^a-z0-9]+/g, '')
-    .replace(ZH_PREFIX, '')
-    .replace(ZH_SUFFIX, '');
+    .replace(ZH_PREFIX, '');
 }
 
 let zhIndex = null;

@@ -321,15 +321,24 @@ function seedFromSnapshot(opts = {}) {
 
 /* 取某联赛某月的数据：缓存新鲜则直接用，否则抓取（失败回落旧缓存）
  * opts.force：无视缓存新鲜度强制抓取（刷新按钮 / 直播轮询）
+ * opts.forceLeagues：定向刷新的联赛集合；不在集合里的联赛只读缓存，
+ *   不因“本次没有重验”而把整个页面标成过期（直播轮询只重取有直播的赛事）
  * opts.cacheOnly：只读缓存不发网络（stale-while-revalidate 的第一步）
  */
 async function ensureMonth(leagueId, ym, opts = {}) {
   const cached = readCache(leagueId, ym);
+  const scoped = opts.forceLeagues
+    ? (opts.forceLeagues instanceof Set ? opts.forceLeagues : new Set(opts.forceLeagues))
+    : null;
+  const targeted = scoped ? scoped.has(leagueId) : null;
+  const force = !!opts.force && targeted !== false;
+  /* 定向刷新时，未点名的联赛按缓存出图；没有缓存才照常补取一次 */
+  if (targeted === false && cached) return { data: cached, fromCache: true, stale: false };
   const fresh = !!cached && Date.now() - cached.fetchedAt < monthTtlMs(ym, cached);
-  if (fresh && !opts.force) return { data: cached, fromCache: true, stale: false };
+  if (fresh && !force) return { data: cached, fromCache: true, stale: false };
   /* 冷却期或只读模式：不发网络（force 可穿透冷却） */
-  if (opts.cacheOnly || (networkCoolingDown() && !opts.force)) {
-    return { data: cached, fromCache: !!cached, stale: true, missing: !cached };
+  if (opts.cacheOnly || (networkCoolingDown() && !force)) {
+    return { data: cached, fromCache: !!cached, stale: targeted !== false, missing: !cached };
   }
   try {
     return await fetchMonth(leagueId, ym);
@@ -541,20 +550,22 @@ async function collectView(dayKey, jobs, policy) {
 
 async function loadDay(dayKey, opts = {}) {
   const leagues = opts.leagues || DEFAULT_ENABLED;
+  /* 定向刷新：只有这些联赛强制联网，其余联赛直接用缓存（直播轮询 / 开球重验） */
+  const forceLeagues = opts.refreshLeagues ? new Set(opts.refreshLeagues) : null;
   const jobs = [];
   for (const leagueId of leagues) {
     for (const ym of monthsForDay(dayKey)) jobs.push({ leagueId, ym });
   }
 
-  const instant = await collectView(dayKey, jobs, { cacheOnly: true, force: opts.force });
+  const instant = await collectView(dayKey, jobs, { cacheOnly: true });
   const needsNetwork = opts.force || instant.stale || !instant.fetchedAt;
   if (!needsNetwork) return instant;
 
   const refresh = async (onProgress) => {
-    // 先走与页面同源的快照。微信内置浏览器无需先连接 ESPN 即可取得完整赛程。
-    await seedFromSnapshot({ force: opts.force });
+    // 冷启动才用同源快照补种；已有快照时不再重下一份（每次 38KB）。
+    await seedFromSnapshot();
     if (onProgress) onProgress();
-    return collectView(dayKey, jobs, { force: opts.force, onProgress });
+    return collectView(dayKey, jobs, { force: opts.force, forceLeagues, onProgress });
   };
   if (instant.fetchedAt && !opts.force) {
     refresh()

@@ -7,7 +7,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { tsImport } from 'tsx/esm/api';
@@ -228,6 +228,18 @@ test('national team search merges competitions and supports Chinese names and ni
   assert.equal(h.call('zhName("Türkiye")'), '土耳其');
   assert.equal(h.call('zhName("Congo DR")'), '刚果民主共和国');
   assert.equal(h.call('zhName("Congo")'), '刚果共和国');
+});
+
+test('club suffixes never eat the last letter of a team name', () => {
+  const h = harness([], true);
+  /* "Shenhua" 结尾的 a 不能和后面的 "FC" 拼成后缀 "afc" 被一起删掉 */
+  assert.equal(h.call('normalizeTeamName("SHANGHAI SHENHUA FC")'), 'shanghaishenhua');
+  assert.equal(h.call('zhName("SHANGHAI SHENHUA FC")'), '上海申花');
+  assert.equal(h.call('zhName("Shanghai Shenhua")'), '上海申花');
+  assert.equal(h.call('zhName("Roma FC")'), '罗马');
+  assert.equal(h.call('normalizeTeamName("AFC Bournemouth")'), 'bournemouth');
+  assert.equal(h.call('normalizeTeamName("1. FC Union Berlin")'), h.call('normalizeTeamName("Union Berlin")'));
+  assert.equal(h.call('zhName("FC Barcelona")'), '巴塞罗那');
 });
 
 test('following a national team from one match finds its disabled qualifiers and cup matches', async () => {
@@ -687,6 +699,21 @@ test('a page-level refresh error keeps the live score and schedules another atte
   assert.match(h.hero(), /比分更新失败 · 稍后自动重试/);
 });
 
+test('the live poll asks only for leagues that have a live match', async () => {
+  const h = harness([], true);
+  h.context.live = { ...match('live', 'eng.1', 30), status: 'LIVE', live: true, start: new Date().toISOString() };
+  h.context.finished = { ...match('done', 'esp.1', 30), status: 'FT', live: false, start: new Date().toISOString() };
+  h.call(`state.loading = false; state.enabled = new Set(['eng.1', 'esp.1']);
+    state.data = { matches: [live, finished], failed: [], fetchedAt: Date.now() }; publish()`);
+  assert.deepEqual([...h.call('livePollLeagues()')], ['eng.1']);
+  h.call(`const loadCalls = []; enrichEmptyDay = async () => {}; schedulePrefetch = () => {};
+    loadDayVisible = async (key, opts) => { loadCalls.push(opts); return { dayKey: key, matches: [], failed: [], fetchedAt: Date.now() }; }`);
+  await h.call("reload({ force: true, refreshLeagues: ['eng.1'] })");
+  assert.equal(h.call('loadCalls.length'), 1);
+  assert.deepEqual([...h.call('loadCalls[0].refreshLeagues')], ['eng.1']);
+  assert.equal(h.call('loadCalls[0].force'), true);
+});
+
 test('partially unavailable leagues do not hide nearby cached matchdays', async () => {
   const h = harness([
     monthCache('eng.1', [match('known', 'eng.1', 22)]),
@@ -716,6 +743,46 @@ test('failed refresh with old data explicitly reports stale cache', async () => 
   assert.equal(day.fromCache, true);
   assert.equal(day.stale, true);
   assert.equal(day.failed.length, 0);
+});
+
+test('a targeted refresh only re-fetches the leagues that were asked for', async () => {
+  const h = harness([], false);
+  const day = h.call('dayKeyOf(new Date())');
+  const months = h.call(`monthsForDay(${JSON.stringify(day)})`);
+  const start = new Date().toISOString();
+  const event = (id, league) => ({ id, league, start, status: 'SCHEDULED',
+    home: { name: 'Home', teamId: '1' }, away: { name: 'Away', teamId: '2' } });
+  for (const ym of months) {
+    seedMonth(h, 'eng.1', ym, [event('target', 'eng.1')]);
+    seedMonth(h, 'esp.1', ym, [event('kept', 'esp.1')]);
+  }
+  const urls = [];
+  const liveEvent = { id: 'target', date: start, status: { type: { name: 'STATUS_IN_PROGRESS', state: 'in' } },
+    competitions: [{ competitors: [
+      { homeAway: 'home', team: { id: '1', displayName: 'Home' }, score: '1' },
+      { homeAway: 'away', team: { id: '2', displayName: 'Away' }, score: '0' },
+    ] }] };
+  h.setFetch((url) => {
+    urls.push(String(url));
+    return { ok: true, json: async () => ({ leagues: [], events: String(url).includes('/eng.1/') ? [liveEvent] : [] }) };
+  });
+  const view = await h.call(`loadDay(${JSON.stringify(day)}, { leagues: ['eng.1', 'esp.1'], force: true, refreshLeagues: ['eng.1'] })`);
+  assert.ok(urls.some((url) => url.includes('/eng.1/')), 'the live league is refreshed');
+  assert.equal(urls.some((url) => url.includes('/esp.1/')), false, 'other leagues stay on cache');
+  assert.deepEqual([...view.matches.map((m) => m.id)].sort(), ['kept', 'target']);
+  assert.equal(view.matches.find((m) => m.id === 'target').status, 'LIVE');
+  assert.equal(view.stale, false);
+});
+
+test('a forced day load reuses the seeded snapshot instead of downloading it again', async () => {
+  const h = harness([], false);
+  const day = h.call('dayKeyOf(new Date())');
+  for (const ym of h.call(`monthsForDay(${JSON.stringify(day)})`)) seedMonth(h, 'eng.1', ym, []);
+  h.call('const seedCalls = []; seedFromSnapshot = (opts = {}) => { seedCalls.push(opts); return Promise.resolve(false); };');
+  h.setFetch(() => ({ ok: true, json: async () => ({ events: [], leagues: [] }) }));
+  await h.call(`loadDay(${JSON.stringify(day)}, { leagues: ['eng.1'], force: true })`);
+  assert.equal(h.call('seedCalls.length'), 1);
+  assert.equal(h.call('seedCalls[0].force'), undefined);
 });
 
 test('no cache plus failed fetch remains unavailable, not a confirmed empty day', async () => {
@@ -1761,7 +1828,8 @@ test('snapshot CLIs import shared ESM normalizers and publish valid schedule and
       }]
     } });`);
     for (const file of ['build-snapshot.js', 'build-teams-snapshot.js']) {
-      const result = spawnSync(process.execPath, ['--import', mock, path.join(directory, 'tools', file)], { encoding: 'utf8', timeout: 10000 });
+      // --import 需要 URL：Windows 的 D:\... 会被当成 URL scheme 拒绝。
+      const result = spawnSync(process.execPath, ['--import', pathToFileURL(mock).href, path.join(directory, 'tools', file)], { encoding: 'utf8', timeout: 10000 });
       assert.equal(result.status, 0, result.stderr || String(result.error));
     }
     const { LEAGUES } = await import('../config.js');
