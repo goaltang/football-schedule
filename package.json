@@ -16,6 +16,7 @@
     "ics": "node tools/build-ics.js"
   },
   "dependencies": {
+    "@fontsource-variable/big-shoulders": "^5.3.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
