@@ -175,7 +175,7 @@ test('national competition filters preserve saved club choices', () => {
   assert.match(h.elements['#chips'].innerHTML, /aria-label="俱乐部赛事"/);
   assert.match(h.elements['#chips'].innerHTML, /aria-label="国家队赛事"/);
   assert.match(h.elements['#chips'].innerHTML, /data-league="fifa.friendly" aria-pressed="false"/);
-  assert.equal(h.elements['#filterCount'].textContent, '已选 2');
+  assert.equal(h.elements['#filterCount'].textContent, '2');
   h.call('state.enabled.add("fifa.friendly"); saveEnabled(); publish()');
   assert.match(h.elements['#chips'].innerHTML, /data-league="fifa.friendly" aria-pressed="true"/);
   assert.deepEqual(JSON.parse(h.storage.getItem('fs1.enabled')), ['eng.1', 'esp.1', 'fifa.friendly']);
@@ -501,13 +501,13 @@ function harness(entries = [], withApp = false) {
       elements['#followResults'].innerHTML = markup(SearchResults);
       const filters = markup(LeagueFilters);
       elements['.filters'].innerHTML = filters;
-      elements['#refresh'].setAttribute('aria-busy', /id="refresh" aria-busy="([^"]*)"/.exec(filters)[1]);
       elements['#filterCount'].textContent = /id="filterCount">([^<]*)/.exec(filters)[1];
       elements['#followCount'].textContent = state.followed.length ? String(state.followed.length) : '';
       elements['#followToggle'].setAttribute('aria-expanded', String(state.followOpen));
       if (state.followOpen) elements['#followManager'].removeAttribute('hidden');
       else elements['#followManager'].setAttribute('hidden', '');
       const hero = markup(Hero);
+      elements['#refresh'].setAttribute('aria-busy', /id="refresh" aria-busy="([^"]*)"/.exec(hero)[1]);
       for (const id of ['heroDate', 'heroWd', 'heroRel', 'heroCount', 'updated']) elements[`#${id}`].textContent = new RegExp(`id="${id}">([^<]*)`).exec(hero)[1];
     };
     context.__paint = paint;

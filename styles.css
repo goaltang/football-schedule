@@ -244,13 +244,24 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn:hover { background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
 .btn.busy { opacity: 0.5; pointer-events: none; }
 
-.today-jump { flex: none; }
-.today-jump.off { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
-.quick-dates { display: inline-flex; align-items: center; gap: 6px; }
-.tonight-jump.on { background: var(--board); color: var(--board-text); }
-.tonight-jump.on:hover { background: color-mix(in srgb, var(--board) 88%, var(--board-text)); }
+.today-jump {
+  align-self: center; flex: none; min-height: 28px; padding: 0 10px; cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); border-radius: 999px;
+  background: none; color: var(--accent); font-family: var(--body); font-size: 12px;
+}
+.today-jump:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
-.refresh { flex: none; }
+/* 刷新并入更新时间：点时间即刷新；44px 点击盒用负边距抵消，不撑高标题行 */
+.refresh {
+  display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px;
+  min-height: 44px; margin: -14px -8px -14px 0; padding: 0 8px; cursor: pointer;
+  border: 0; border-radius: 3px; background: none; color: var(--muted);
+}
+.refresh:hover, .refresh:hover .meta { color: var(--accent); }
+.refresh.busy { pointer-events: none; }
+.refresh-icon { width: 14px; height: 14px; flex: none; }
+.refresh.busy .refresh-icon { animation: refresh-spin 0.9s linear infinite; }
+@keyframes refresh-spin { to { transform: rotate(360deg); } }
 
 /* ---------- 联赛筛选（非吸顶） ---------- */
 
@@ -262,49 +273,30 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   padding: 12px 20px 0;
 }
 
-.filter-toolbar {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0;
-}
+.filter-toolbar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.toolbar-end { display: flex; align-items: center; gap: 8px; min-width: 0; margin-left: auto; }
 
 .filter-toggle {
-  display: flex; flex: 1 1 260px; min-width: 0;
-  align-items: center; gap: 10px; text-align: left;
-  border: 1px solid var(--line-soft); background: var(--card); color: var(--paper);
-  min-height: 64px; padding: 10px 12px; border-radius: 4px; cursor: pointer;
-  font-family: var(--body); font-size: 13px;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 260px;
+  color: var(--paper); border-color: var(--line-soft);
 }
 .filter-toggle:hover { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
-.filter-icon {
-  display: grid; place-items: center; flex: none; width: 32px; height: 32px;
-  border-radius: 8px; background: color-mix(in srgb, var(--accent) 9%, var(--card)); color: var(--filter-accent);
-}
-.filter-icon svg { width: 22px; height: 22px; }
-.filter-toggle-copy { display: grid; gap: 3px; flex: 1; min-width: 0; }
-.filter-toggle-title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
-.filter-summary {
-  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--filter-muted); font-size: 12px; font-weight: 400;
-}
-.filter-toggle-text { flex: none; color: var(--filter-muted); font-size: 12px; }
-.filter-toggle::after {
-  content: ""; flex: none; width: 6px; height: 6px;
-  border-right: 1.5px solid var(--filter-muted); border-bottom: 1.5px solid var(--filter-muted);
-  transform: rotate(-45deg); margin: 0 3px 0 0;
-}
+.filter-icon { width: 18px; height: 18px; flex: none; color: var(--filter-accent); }
+.filter-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .filters.is-open .filter-toggle { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
 
 .filter-count {
+  display: none;
   font-family: var(--display); font-size: 11px; font-weight: 700;
   color: var(--filter-accent);
   background: color-mix(in srgb, var(--accent) 10%, var(--card)); border-radius: 5px;
   padding: 1px 7px; line-height: 1.5; font-variant-numeric: tabular-nums;
 }
-.filter-count:empty { display: none; }
 
-.secondary-actions { display: flex; flex: 2 1 380px; min-width: 0; flex-wrap: wrap; gap: 8px; margin-left: auto; }
-.schedule-controls, .schedule-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.schedule-actions { margin-left: auto; }
+/* 只看关注 + 管理关注：同一组，拼成一个分体按钮 */
+.follow-group { display: inline-flex; flex: none; gap: 1px; }
+.follow-group .btn:first-child { border-radius: 3px 0 0 3px; }
+.follow-group .btn:last-child { border-radius: 0 3px 3px 0; }
 .scope-toggle { white-space: nowrap; }
 .scope-toggle.on { background: var(--board); color: var(--board-text); }
 .scope-toggle.on:hover { background: color-mix(in srgb, var(--board) 88%, var(--board-text)); }
@@ -803,7 +795,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .score .sc.flip { animation: tile-fresh 6s ease-in; }
   .skel-row { animation: none; }
   .star:hover { transform: none; }
-  .filter-toggle::after { transition: none; }
+  .refresh.busy .refresh-icon { animation: none; }
   .follow-toggle::after { transition: none; }
   .panel-dialog::backdrop, .panel-dialog[open] .panel-surface { animation: none; }
 }
@@ -857,25 +849,18 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .lg-head h2 { font-size: 18px; }
   .lg-en { display: none; }
 
-  /* 日期条：日期占满一行，操作按钮放下一行，避免被挤出屏幕 */
-  .datebar { flex-wrap: wrap; }
-  .days {
-    order: -1; flex-basis: 100%; min-width: 0;
-    display: flex; overflow-x: auto; overscroll-behavior-inline: contain;
-    scrollbar-color: var(--accent) var(--ink-2); scrollbar-width: thin;
-    padding-bottom: 5px;
-  }
-  .day { flex: 0 0 48px; }
-  .days:focus-within { scroll-behavior: smooth; }
-  .days::-webkit-scrollbar { height: 5px; }
-  .days::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 5px; }
-  .days::-webkit-scrollbar-track { background: var(--ink-2); }
-  .filter-toolbar { flex-direction: column; align-items: stretch; gap: 8px; }
-  .filter-toggle { width: 100%; flex: auto; }
-  .secondary-actions { flex: auto; margin-left: 0; justify-content: flex-end; gap: 6px; }
-  .secondary-actions .view-seg { margin-right: auto; }
-  .schedule-controls { flex-basis: 100%; }
-  .schedule-actions { justify-content: flex-end; gap: 6px; }
+  /* 日期条：翻页箭头收窄后与 7 天同排，不再单独占一行 */
+  .datebar { gap: 4px; }
+  .nav { width: 30px; }
+  .days { gap: 3px; }
+  .day { min-width: 0; padding-inline: 0; }
+  .day-date { font-size: 16px; }
+  /* 工具条：赛事只留图标和数量，只看关注只留 ★，保持一行 */
+  .filter-toolbar, .toolbar-end { gap: 6px; }
+  .filter-toggle { padding: 0 10px; gap: 6px; }
+  .filter-summary, .scope-text { display: none; }
+  .filter-count { display: inline; }
+  .follow-group .btn { padding: 0 12px; }
   .filters { padding-inline: 12px; }
   .filter-presets { gap: 6px; }
   .chip-options, .chip-group-national .chip-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -915,7 +900,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   font-family: var(--body); font-size: 12px; color: var(--muted);
   background: none; border: 0; padding: 4px 10px; cursor: pointer;
 }
-.seg { border-radius: 7px; min-width: 40px; min-height: 36px; }
+.seg { border-radius: 7px; min-width: 44px; min-height: 40px; }
 .seg.on { background: var(--card); color: var(--paper); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
 
 .wday {

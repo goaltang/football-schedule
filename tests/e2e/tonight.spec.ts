@@ -78,7 +78,7 @@ test('today, date navigation and seven-day view leave tonight with their usual d
   await page.goto('./');
   const tonight = page.getByRole('button', { name: '今晚', exact: true });
   await tonight.click();
-  await page.getByRole('button', { name: '今天', exact: true }).click();
+  await page.locator('[data-day="2026-09-30"]').click();
   await expect(tonight).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('#heroDate')).toHaveText('09.30');
   await expect(page.getByRole('button', { name: '按日查看' })).toHaveAttribute('aria-pressed', 'true');

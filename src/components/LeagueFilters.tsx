@@ -1,6 +1,5 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 import { LEAGUES } from '../../config.js';
-import { dayKeyOf } from '../../data.js';
 import type { ViewProps } from '../types';
 import { FollowManager } from './FollowManager';
 import { ScheduleScope } from './ScheduleScope';
@@ -63,8 +62,7 @@ export function LeagueFilters(props: ViewProps) {
   const selected = LEAGUES.filter((league) => state.enabled.has(league.id));
   const selectedNames = selected.map((league) => league.zh).join(' · ');
   const activePreset = presets.find((preset) => matchesSelection(preset.ids, state.enabled));
-  const summary = activePreset?.summary || (selected.length <= 3 ? selectedNames :
-    `${selected.slice(0, 3).map((league) => league.zh).join(' · ')} 等 ${selected.length} 项`);
+  const summary = activePreset?.summary || (selected.length <= 2 ? selectedNames : `${selected.length} 项赛事`);
 
   function onTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     let next = index;
@@ -79,33 +77,23 @@ export function LeagueFilters(props: ViewProps) {
 
   return <div className={`filters${state.filtersOpen ? ' is-open' : ''}`}>
     <div className="filter-toolbar">
-      <button type="button" className="filter-toggle" id="filterToggle" aria-controls="chips" aria-haspopup="dialog"
-        aria-expanded={state.filtersOpen} aria-label={`赛事筛选，已选 ${selected.length} 项`}
-        onClick={api.toggleFilters}>
-        <span className="filter-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-          <path d="M4 7h4m4 0h8M4 17h8m4 0h4" /><circle cx="10" cy="7" r="2" /><circle cx="14" cy="17" r="2" />
-        </svg></span>
-        <span className="filter-toggle-copy">
-          <span className="filter-toggle-title">赛事筛选 <span className="filter-count" id="filterCount">已选 {selected.length}</span></span>
-          <span className="filter-summary" title={selectedNames}>{summary}</span>
-        </span>
-        <span className="filter-toggle-text" aria-hidden="true">调整</span>
-      </button>
-      <div className="secondary-actions">
-        <div className="schedule-controls">
-          <div className="view-seg" role="group" aria-label="视图">
-            <button type="button" className={`seg${state.view === 'day' ? ' on' : ''}`} id="viewDay" aria-label="按日查看" aria-pressed={state.view === 'day'} onClick={() => api.setView('day')}>日</button>
-            <button type="button" className={`seg${state.view === 'week' ? ' on' : ''}`} id="viewWeek" aria-label="按周查看" title="从所选日期起查看7天" aria-pressed={state.view === 'week'} onClick={() => api.setView('week')}>7天</button>
-          </div>
+      <div className="view-seg" role="group" aria-label="视图">
+        <button type="button" className={`seg${state.view === 'day' ? ' on' : ''}`} id="viewDay" aria-label="按日查看" aria-pressed={state.view === 'day'} onClick={() => api.setView('day')}>日</button>
+        <button type="button" className={`seg${state.view === 'tonight' ? ' on' : ''}`} id="goTonight" aria-pressed={state.view === 'tonight'} aria-controls="list" onClick={() => api.setView('tonight')}>今晚</button>
+        <button type="button" className={`seg${state.view === 'week' ? ' on' : ''}`} id="viewWeek" aria-label="按周查看" title="从所选日期起查看7天" aria-pressed={state.view === 'week'} onClick={() => api.setView('week')}>7天</button>
+      </div>
+      <div className="toolbar-end">
+        <button type="button" className="btn filter-toggle" id="filterToggle" aria-controls="chips" aria-haspopup="dialog"
+          aria-expanded={state.filtersOpen} aria-label={`赛事筛选，已选 ${selected.length} 项`} title={selectedNames}
+          onClick={api.toggleFilters}>
+          <svg className="filter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+            <path d="M4 7h4m4 0h8M4 17h8m4 0h4" /><circle cx="10" cy="7" r="2" /><circle cx="14" cy="17" r="2" />
+          </svg>
+          <span className="filter-summary">{summary}</span>
+          <span className="filter-count" id="filterCount">{selected.length}</span>
+        </button>
+        <div className="follow-group" role="group" aria-label="关注">
           <ScheduleScope {...props} />
-        </div>
-        <div className="schedule-actions">
-          <div className="quick-dates" role="group" aria-label="快捷日期">
-            <button className={`btn today-jump${state.view === 'tonight' || state.dayKey !== dayKeyOf(new Date(state.now)) ? ' off' : ''}`} id="goToday" onClick={() => api.gotoDay(dayKeyOf(new Date()), { resetWeek: true })}>今天</button>
-            <button type="button" className={`btn tonight-jump${state.view === 'tonight' ? ' on' : ''}`} id="goTonight"
-              aria-pressed={state.view === 'tonight'} aria-controls="list" onClick={() => api.setView('tonight')}>今晚</button>
-          </div>
-          <button className={`btn refresh${state.loading ? ' busy' : ''}`} id="refresh" aria-busy={state.loading} onClick={() => api.reload({ force: true })}>刷新</button>
           <button type="button" className="btn follow-toggle" id="followToggle" aria-controls="followManager" aria-haspopup="dialog" aria-expanded={state.followOpen} onClick={api.toggleFollowPanel}>关注 <span className="follow-count" id="followCount">{state.followed.length || ''}</span></button>
         </div>
       </div>
