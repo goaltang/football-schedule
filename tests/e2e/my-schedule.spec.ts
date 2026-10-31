@@ -289,16 +289,19 @@ test('a later date choice cancels preview focus and scroll when its delayed refr
     await page.locator('#followTeams').getByRole('button', { name: /查看当天比赛.*曼联.*2026-10-06/ }).click();
     await pending.requested;
     await expect(page.locator('#updated')).toContainText('更新中');
-    const today = page.getByRole('button', { name: '今天', exact: true });
+    const today = page.getByRole('button', { name: '回到今天', exact: true });
     await today.focus();
     await today.press('Enter');
     await expect(page.locator('#heroDate')).toHaveText('09.30');
+    await expect(today).toHaveCount(0);
+    const todayChip = page.locator('[data-day="2026-09-30"]');
+    await expect(todayChip).toBeFocused();
     await expect(page.locator('#list .match[data-match="current-unrelated"]')).toHaveCount(1);
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     pending.release();
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('fs1|m|eng.1|202610')!).fetchedAt)).toBeGreaterThanOrEqual(Date.parse('2026-09-30T12:00:00+08:00'));
     await page.clock.runFor(60_000);
-    await expect(today).toBeFocused();
+    await expect(todayChip).toBeFocused();
     await expect(page.locator('#heroDate')).toHaveText('09.30');
     await expect(page.locator('#list .match[data-match="delayed-preview"]')).toHaveCount(0);
     expect(await page.evaluate(() => scrollY)).toBe(0);
@@ -368,8 +371,9 @@ test('seven-day navigation uses adjacent ranges and Today restores the upcoming 
   await expect(page.locator('#heroDate')).toHaveText('09.30–10.06');
   await page.getByRole('button', { name: '前一周', exact: true }).click();
   await expect(page.locator('#heroDate')).toHaveText('09.23–09.29');
-  await page.getByRole('button', { name: '今天', exact: true }).click();
+  await page.getByRole('button', { name: '回到今天', exact: true }).click();
   await expect(page.locator('#heroDate')).toHaveText('09.30–10.06');
+  await expect(page.getByRole('button', { name: '回到今天', exact: true })).toHaveCount(0);
   await expect(page.locator('#list .match')).toHaveCount(4);
 });
 

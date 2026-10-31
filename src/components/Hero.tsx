@@ -1,4 +1,4 @@
-import { addDays, parseDayKey } from '../../data.js';
+import { addDays, dayKeyOf, parseDayKey } from '../../data.js';
 import { weekdayOf, relativeLabel, fmtDayLabel, fmtTime } from '../domain/format.js';
 import { tonightRange } from '../domain/tonight.js';
 import { scoreUpdateInfo, updateTimeLabel } from '../domain/score-updates.js';
@@ -33,8 +33,21 @@ export function Hero({ state, api }: ViewProps) {
     : state.loading || data?.pending ? uiText.loading : state.error ? uiText.unavailable
       : !data || (!weekly && !data.fetchedAt) || status !== 'ready' ? uiText.unconfirmed : state.onlyFollowed ? '暂无关注球队比赛' : tonight ? '今晚暂无比赛' : weekly ? uiText.emptyWeek : uiText.emptyDay;
   const relative = relativeLabel(state.dayKey);
-  return <header className="top"><div className="masthead"><h1>赛程</h1><div className="mast-side"><span className="meta" id="updated">{updated}</span></div></div>
-    <div className="day-hero"><div className="hero-main"><span className="hero-date" id="heroDate">{tonight ? '今晚' : weekly ? range : monthDay(state.dayKey)}</span><span className="hero-wd" id="heroWd">{tonight ? `${fmtTime(night.start)}–次日${fmtTime(night.end)}` : weekly ? '7天' : weekdayOf(state.dayKey)}</span><span className="hero-rel" id="heroRel">{tonight || weekly || relative === weekdayOf(state.dayKey) ? '' : relative}</span></div><span className="hero-count" id="heroCount">{total}</span></div>
+  const today = dayKeyOf(new Date(state.now));
+  const todayVisible = today >= state.windowStart && today <= addDays(state.windowStart, 6);
+  return <header className="top"><div className="masthead"><h1>赛程</h1><div className="mast-side">
+    <button type="button" className={`refresh${state.loading ? ' busy' : ''}`} id="refresh" aria-busy={state.loading} aria-label="刷新" aria-describedby="updated"
+      title="刷新" onClick={() => api.reload({ force: true })}><span className="meta" id="updated">{updated}</span>
+      <svg className="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4.5h-4.5" />
+      </svg></button></div></div>
+    <div className="day-hero"><div className="hero-main"><span className="hero-date" id="heroDate">{tonight ? '今晚' : weekly ? range : monthDay(state.dayKey)}</span><span className="hero-wd" id="heroWd">{tonight ? `${fmtTime(night.start)}–次日${fmtTime(night.end)}` : weekly ? '7天' : weekdayOf(state.dayKey)}</span><span className="hero-rel" id="heroRel">{tonight || weekly || relative === weekdayOf(state.dayKey) ? '' : relative}</span>
+      {!todayVisible && <button type="button" className="today-jump" id="goToday" onClick={() => {
+        const key = dayKeyOf(new Date());
+        api.gotoDay(key, { resetWeek: true });
+        // The link disappears once today is in the strip; keep keyboard focus on today's chip.
+        requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-day="${key}"]`)?.focus({ preventScroll: true }));
+      }}>回到今天</button>}</div><span className="hero-count" id="heroCount">{total}</span></div>
     {tonight && <p className="tonight-range" id="tonightRange">{fmtDayLabel(state.dayKey)}晚间 — {fmtDayLabel(night.dayKeys[1])}凌晨 · 本机时区</p>}
     {scoreUpdate && <p className={`score-update ${scoreUpdate.phase}`} id="scoreUpdate" role="status" aria-live="polite" aria-atomic="true">{scoreUpdate.text}</p>}
   </header>;

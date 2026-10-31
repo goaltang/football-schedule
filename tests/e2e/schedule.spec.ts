@@ -18,7 +18,7 @@ test('date navigation, week view and persisted follows work in the built app', a
   await page.getByRole('button', { name: '后一天', exact: true }).click();
   await expect(page.locator('#heroDate')).toHaveText('10.01');
   await expect(page.locator('#list .score')).toHaveText('2–1');
-  await page.getByRole('button', { name: '今天', exact: true }).click();
+  await page.locator('[data-day="2026-09-30"]').click();
   await expect(page.locator('#heroDate')).toHaveText('09.30');
   expect(errors).toEqual([]);
 });
