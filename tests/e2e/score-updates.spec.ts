@@ -43,9 +43,12 @@ test('live hints reflect score age, an in-flight refresh and the completed resul
   await page.getByRole('button', { name: '刷新', exact: true }).click();
   await expect(page.locator('#scoreUpdate')).toContainText('正在更新比分');
   await expect(page.locator('#list .score')).toHaveText('1–0');
+  await expect(page.locator('#list .score .sc.flip')).toHaveCount(0);
   await expect(page.locator('#updated')).toHaveText('比分更新于 11:55');
   release();
   await expect(page.locator('#list .score')).toHaveText('2–0');
+  // 只有变化的那块比分牌翻动
+  await expect(page.locator('#list .score .sc.flip')).toHaveText('2');
   await expect(page.locator('#scoreUpdate')).toContainText('约每分钟自动更新');
   await expect(page.locator('#updated')).toHaveText('比分更新于 12:00');
   await page.getByRole('button', { name: '按周查看' }).click();

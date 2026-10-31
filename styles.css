@@ -1,16 +1,26 @@
-/* 系统原生风：跟随系统浅/深色，分组卡片列表，单一系统蓝强调色 */
+/* 手翻记分牌：看台水泥底，联赛是一块墨绿记分牌，比分是一块块翻牌。
+ * 信号黄只给进行中的比赛；时间、比分、日期用窄体号码字，中文走系统黑体。 */
 :root {
-  --ink: #F2F2F7;
-  --ink-2: #E5E5EA;
-  --card: #FFFFFF;
-  --paper: #1C1C1E;
-  --muted: #8E8E93;
-  --line: rgba(60, 60, 67, 0.18);
-  --line-soft: rgba(60, 60, 67, 0.1);
-  --accent: #007AFF;
-  --on-accent: #FFFFFF;
-  --live: #FF3B30;
-  --warn: #C9711E;
+  --ink: #D9DBD6;
+  --ink-2: #C8CBC5;
+  --card: #EEF0EC;
+  --paper: #1B2723;
+  --muted: #4F5B56;
+  --line: rgba(23, 54, 43, 0.22);
+  --line-soft: rgba(23, 54, 43, 0.12);
+  --accent: #17362B;
+  --on-accent: #ECEFEA;
+  --live: #B42318;
+  --warn: #9A5B0B;
+  /* 记分牌牌面 */
+  --board: #17362B;
+  --board-edge: rgba(0, 0, 0, 0.18);
+  --tile: #0E241D;
+  --board-text: #ECEFEA;
+  --board-muted: #93A89E;
+  --groove: rgba(0, 0, 0, 0.3);
+  --signal: #F2C230;
+  --num: "Big Shoulders Variable", "Arial Narrow", "PingFang SC", "Microsoft YaHei UI", sans-serif;
   --display: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
   --body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --ease-out: cubic-bezier(0.22, 0.7, 0.3, 1);
@@ -18,17 +28,33 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ink: #000000;
-    --ink-2: #2C2C2E;
-    --card: #1C1C1E;
-    --paper: #F2F2F7;
-    --muted: #8E8E93;
-    --line: rgba(84, 84, 88, 0.65);
-    --line-soft: rgba(84, 84, 88, 0.4);
-    --accent: #0A84FF;
-    --live: #FF453A;
-    --warn: #FF9F0A;
+    --ink: #1B2220;
+    --ink-2: #2B3431;
+    --card: #252E2B;
+    --paper: #E3E8E5;
+    --muted: #93A09A;
+    --line: rgba(227, 232, 229, 0.2);
+    --line-soft: rgba(227, 232, 229, 0.1);
+    --accent: #A9D5BE;
+    --on-accent: #10261F;
+    --live: #FF6B5A;
+    --warn: #F0A43C;
+    --board: #18392D;
+    --board-edge: rgba(255, 255, 255, 0.07);
   }
+}
+
+/* 牌面内部：沿用同一套变量名，组件样式无需各写一份深色版本 */
+.league, .wday {
+  --paper: var(--board-text);
+  --muted: var(--board-muted);
+  --line-soft: var(--groove);
+  --line: rgba(236, 239, 234, 0.22);
+  --accent: var(--board-text);
+  --on-accent: var(--board);
+  --live: var(--signal);
+  --card: var(--board);
+  --warn: #F0A43C;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -62,9 +88,10 @@ body {
 
 .masthead h1 {
   font-family: var(--display);
-  font-size: 32px;
+  font-size: 20px;
   font-weight: 700;
-  line-height: 1.1;
+  line-height: 1.2;
+  color: var(--accent);
 }
 
 .mast-side {
@@ -99,10 +126,11 @@ body {
 .hero-main { display: flex; align-items: baseline; gap: 18px; min-width: 0; }
 
 .hero-date {
-  font-family: var(--display);
-  font-size: 34px;
-  font-weight: 700;
-  line-height: 1;
+  font-family: var(--num);
+  font-size: 60px;
+  font-weight: 800;
+  line-height: 0.9;
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
   position: relative;
   white-space: nowrap;
@@ -149,7 +177,7 @@ body {
 .nav {
   width: 44px; min-height: 44px; flex: none;
   border: 0; background: var(--card); color: var(--accent);
-  font-size: 18px; cursor: pointer; border-radius: 6px;
+  font-size: 18px; cursor: pointer; border-radius: 3px;
   transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
 .nav:hover { background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
@@ -161,7 +189,7 @@ body {
 .day {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   min-height: 44px; min-width: 44px; padding: 7px 2px 6px;
-  border: 1px solid transparent; border-radius: 6px;
+  border: 1px solid transparent; border-radius: 3px;
   background: var(--card); color: var(--muted); cursor: pointer;
   font-family: var(--body); transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
@@ -169,17 +197,18 @@ body {
 
 .day-rel { font-size: 11px; }
 .day-date {
-  font-family: var(--display); font-size: 17px; font-variant-numeric: tabular-nums;
+  font-family: var(--num); font-size: 21px; font-weight: 700; line-height: 1.05;
+  font-variant-numeric: tabular-nums;
 }
 
 .day.today .day-rel { color: var(--accent); }
 .day.today:not(.sel) .day-date { color: var(--accent); }
 
 .day.sel {
-  background: var(--accent); color: var(--on-accent); border-color: var(--accent);
+  background: var(--board); color: var(--board-text); border-color: var(--board);
 }
-.day.sel .day-date { font-weight: 700; }
-.day.sel .day-rel, .day.sel.today .day-rel { color: var(--on-accent); }
+.day.sel .day-date { font-weight: 800; }
+.day.sel .day-rel, .day.sel.today .day-rel { color: var(--board-text); }
 
 .day-dot {
   width: 4px; height: 4px; border-radius: 50%; margin-top: 1px;
@@ -189,15 +218,15 @@ body {
   background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--paper) 45%, transparent);
 }
 .day-dot.fill { background: var(--accent); opacity: 0.9; }
-.day.sel .day-dot.fill { background: var(--on-accent); opacity: 0.8; }
-.day.sel .day-dot.hollow { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-accent) 50%, transparent); }
+.day.sel .day-dot.fill { background: var(--signal); opacity: 1; }
+.day.sel .day-dot.hollow { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--board-text) 55%, transparent); }
 .day-dot.unk {
   background: linear-gradient(90deg, color-mix(in srgb, var(--muted) 90%, transparent) 50%, transparent 50%);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--muted) 75%, transparent);
 }
 .day.sel .day-dot.unk {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--on-accent) 85%, transparent) 50%, transparent 50%);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-accent) 70%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--board-text) 85%, transparent) 50%, transparent 50%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--board-text) 70%, transparent);
 }
 
 button { touch-action: manipulation; }
@@ -208,7 +237,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .btn {
   border: 1px solid transparent; background: var(--card); color: var(--accent);
-  min-height: 44px; padding: 0 14px; border-radius: 6px; cursor: pointer;
+  min-height: 44px; padding: 0 14px; border-radius: 3px; cursor: pointer;
   font-family: var(--body); font-size: 13px;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
@@ -218,8 +247,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .today-jump { flex: none; }
 .today-jump.off { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
 .quick-dates { display: inline-flex; align-items: center; gap: 6px; }
-.tonight-jump.on { background: var(--accent); color: var(--on-accent); }
-.tonight-jump.on:hover { background: color-mix(in srgb, var(--accent) 90%, var(--paper)); }
+.tonight-jump.on { background: var(--board); color: var(--board-text); }
+.tonight-jump.on:hover { background: color-mix(in srgb, var(--board) 88%, var(--board-text)); }
 
 .refresh { flex: none; }
 
@@ -241,7 +270,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   display: flex; flex: 1 1 260px; min-width: 0;
   align-items: center; gap: 10px; text-align: left;
   border: 1px solid var(--line-soft); background: var(--card); color: var(--paper);
-  min-height: 64px; padding: 10px 12px; border-radius: 12px; cursor: pointer;
+  min-height: 64px; padding: 10px 12px; border-radius: 4px; cursor: pointer;
   font-family: var(--body); font-size: 13px;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
@@ -277,8 +306,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .schedule-controls, .schedule-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .schedule-actions { margin-left: auto; }
 .scope-toggle { white-space: nowrap; }
-.scope-toggle.on { background: var(--accent); color: var(--on-accent); }
-.scope-toggle.on:hover { background: color-mix(in srgb, var(--accent) 90%, var(--paper)); }
+.scope-toggle.on { background: var(--board); color: var(--board-text); }
+.scope-toggle.on:hover { background: color-mix(in srgb, var(--board) 88%, var(--board-text)); }
 .scope-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 
 /* ---------- 弹窗 / 抽屉 / 移动端底部面板 ---------- */
@@ -294,7 +323,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .panel-dialog::backdrop { background: rgba(0, 0, 0, 0.38); animation: panel-backdrop-in 0.18s ease-out; }
 .panel-surface {
   display: flex; flex-direction: column; width: 600px; max-width: 100%; max-height: 100%; min-height: 0;
-  background: var(--card); border: 1px solid var(--line-soft); border-radius: 20px;
+  background: var(--card); border: 1px solid var(--line-soft); border-radius: 8px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.2); overflow: hidden;
 }
 .panel-dialog[open] .panel-surface { animation: panel-center-in 0.2s var(--ease-out); }
@@ -315,7 +344,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .panel-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 20px; }
 .panel-footer { flex: none; padding: 12px 20px max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line-soft); }
 .panel-dialog-drawer[open] { justify-content: flex-end; padding: 0; }
-.panel-dialog-drawer .panel-surface { width: 460px; height: 100%; border-radius: 20px 0 0 20px; border-width: 0 0 0 1px; }
+.panel-dialog-drawer .panel-surface { width: 460px; height: 100%; border-radius: 8px 0 0 8px; border-width: 0 0 0 1px; }
 .panel-dialog-drawer .panel-body { flex: 1; }
 .panel-dialog-drawer[open] .panel-surface { animation: panel-drawer-in 0.24s var(--ease-out); }
 @keyframes panel-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
@@ -578,90 +607,120 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .filter-done:hover { background: color-mix(in srgb, var(--accent) 16%, var(--card)); }
 }
 
-/* ---------- 赛程列表 ---------- */
+/* ---------- 赛程列表：每个联赛一块记分牌 ---------- */
 
 .list { padding: 26px 20px 0; }
 
 .league {
-  margin-bottom: 20px;
-  background: var(--card); border-radius: 12px;
-  padding: 0 12px;
+  margin-bottom: 22px;
+  background: var(--board); color: var(--paper);
+  border-radius: 4px;
+  padding: 0 14px 2px;
   overflow: hidden;
+  /* 实心的下沿，像挂在看台上的铁皮板，而不是漂浮的卡片 */
+  box-shadow: 0 0 0 1px var(--board-edge), 0 3px 0 var(--board-edge);
 }
 
 .lg-head {
-  display: flex; align-items: baseline; gap: 10px;
+  display: flex; align-items: center; gap: 10px;
   padding: 12px 0 10px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 2px solid var(--groove);
 }
 .lg-head .crest {
-  width: 18px; height: 18px; align-self: center; object-fit: contain;
-  filter: saturate(0.85);
+  width: 24px; height: 24px; padding: 3px; flex: none; object-fit: contain;
+  border-radius: 50%; background: var(--board-text);
 }
 .lg-no { display: none; }
 .lg-head h2 {
-  font-size: 16px; font-weight: 600; flex: 1;
+  font-size: 16px; font-weight: 700; letter-spacing: 0.04em; flex: 1;
 }
 .lg-en { display: none; }
 .lg-count {
-  font-family: var(--display); font-size: 11.5px;
-  color: var(--muted); font-variant-numeric: tabular-nums;
+  font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
 }
 
 .match:last-child { border-bottom: 0; }
 .match {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 78px minmax(0, 1fr) 92px;
+  grid-template-columns: 64px minmax(0, 1fr) 84px minmax(0, 1fr) 92px;
   align-items: center;
   gap: 10px;
-  padding: 12px 6px 12px 8px;
-  border-bottom: 1px solid var(--line-soft);
-  border-left: 2px solid transparent;
+  padding: 11px 6px 11px 8px;
+  border-bottom: 1px solid var(--groove);
+  border-left: 3px solid transparent;
 }
 
-.rail { display: flex; flex-direction: column; line-height: 1.15; }
+.rail { display: flex; flex-direction: column; line-height: 1.05; }
 .rail time {
-  font-family: var(--display); font-size: 20px; font-variant-numeric: tabular-nums;
+  font-family: var(--num); font-size: 25px; font-weight: 700; font-variant-numeric: tabular-nums;
 }
 .rail .wd {
-  font-family: var(--display); font-size: 10.5px;
-  color: var(--muted); font-variant-numeric: tabular-nums;
+  font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums;
 }
 
 .side { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .side.home { justify-content: flex-end; text-align: right; }
 
 .tname {
-  min-width: 0; font-size: 14.5px; white-space: nowrap; overflow: hidden;
+  min-width: 0; font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* 队徽放在漆白圆牌上：深色队徽在墨绿牌面上也看得清 */
 .logo {
-  width: 28px; height: 28px; flex: none; object-fit: contain;
+  width: 30px; height: 30px; padding: 4px; flex: none; object-fit: contain;
+  border-radius: 50%; background: var(--board-text);
 }
 .logo.broken { display: none; }
-.logo.ghost { display: inline-block; border-radius: 50%; background: color-mix(in srgb, var(--paper) 8%, transparent); }
+.logo.ghost { display: inline-block; padding: 0; background: color-mix(in srgb, var(--board-text) 14%, transparent); }
 
 .score {
-  display: flex; align-items: baseline; justify-content: center; gap: 8px;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
   font-variant-numeric: tabular-nums;
 }
-.score .sc {
-  font-family: var(--display); font-size: 25px; font-weight: 700;
-  min-width: 20px; text-align: center;
-  line-height: 1;
+/* 翻牌：深色底板，中间一道接缝 */
+.score .sc, .score .vs::before, .score .vs::after {
+  box-sizing: border-box; position: relative;
+  display: inline-grid; place-items: center;
+  min-width: 32px; height: 42px; padding: 0 5px;
+  border-radius: 3px;
+  background: var(--tile);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(0, 0, 0, 0.35);
 }
-.score .sc.win { color: var(--paper); }
-.score .sc:not(.win) { color: var(--muted); }
-.score .dash { color: var(--muted); font-style: normal; font-size: 15px; }
+.score .sc {
+  font-family: var(--num); font-size: 31px; font-weight: 700; line-height: 1;
+  color: var(--paper);
+  transform-origin: 50% 50%;
+}
+.score .sc::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px;
+  background: rgba(0, 0, 0, 0.55);
+}
+.score .sc:not(.win) { color: color-mix(in srgb, var(--paper) 62%, var(--tile)); }
+.score .dash { color: var(--muted); font-style: normal; font-size: 14px; }
+/* 未开赛：两块空牌，等着翻 */
 .score .vs {
-  font-family: var(--display); font-size: 12px;
-  color: var(--muted); text-transform: uppercase;
+  display: flex; gap: 4px; font-size: 0; color: transparent;
+}
+.score .vs::before, .score .vs::after {
+  content: ""; opacity: 0.5;
+  background-image: linear-gradient(transparent calc(50% - 0.5px), rgba(0, 0, 0, 0.5) calc(50% - 0.5px), rgba(0, 0, 0, 0.5) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+}
+
+/* 比分变化时翻一次牌，新数字先用信号黄标出，再慢慢回到漆白 */
+.score .sc.flip { animation: tile-flip 0.5s var(--ease-out), tile-fresh 6s ease-in; }
+@keyframes tile-flip {
+  0% { transform: perspective(240px) rotateX(-88deg); }
+  60% { transform: perspective(240px) rotateX(10deg); }
+  100% { transform: none; }
+}
+@keyframes tile-fresh {
+  0%, 40% { color: var(--signal); }
 }
 
 .status {
   display: flex; align-items: center; justify-content: flex-end; gap: 6px;
-  font-family: var(--display); font-size: 12px;
+  font-size: 12px;
   color: var(--muted); white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -669,14 +728,16 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .star {
   flex: none; min-width: 44px; min-height: 44px;
   border: 0; background: none; cursor: pointer; padding: 0;
-  font-size: 16px; line-height: 1; color: var(--paper); opacity: 0.72;
+  font-size: 16px; line-height: 1; color: var(--paper); opacity: 0.6;
   transition: color 0.15s, opacity 0.15s, transform 0.15s;
 }
 .star:hover { opacity: 1; color: var(--accent); transform: scale(1.15); }
 .star.on { color: var(--accent); opacity: 1; }
 
+/* 进行中：一盏信号灯 */
 .dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--live);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--live) 70%, transparent);
   animation: pulse 1.2s ease-in-out infinite;
 }
 @keyframes pulse {
@@ -686,7 +747,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .st-LIVE {
   border-left-color: var(--live);
-  background: color-mix(in srgb, var(--live) 6%, transparent);
+  background: color-mix(in srgb, var(--live) 7%, transparent);
 }
 .st-LIVE .rail time, .st-LIVE .status { color: var(--live); }
 .st-LIVE .score .sc { color: var(--paper); }
@@ -739,6 +800,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
   .dot { animation: none; }
+  .score .sc.flip { animation: tile-fresh 6s ease-in; }
   .skel-row { animation: none; }
   .star:hover { transform: none; }
   .filter-toggle::after { transition: none; }
@@ -748,7 +810,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 @media (max-width: 640px) {
   .panel-dialog[open] { align-items: flex-end; padding: 0; }
-  .panel-dialog .panel-surface { width: 100%; max-height: 90%; border-radius: 20px 20px 0 0; border-width: 1px 0 0; }
+  .panel-dialog .panel-surface { width: 100%; max-height: 90%; border-radius: 8px 8px 0 0; border-width: 1px 0 0; }
   .panel-dialog-drawer .panel-surface { height: 88%; }
   .panel-header { padding: 18px 16px 14px; }
   .panel-body { padding: 16px; }
@@ -756,13 +818,13 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .panel-dialog[open] .panel-surface { animation-name: panel-sheet-in; }
   /* 比赛行：主客各占一行，队名不再被挤成一两个字 */
   .match {
-    grid-template-columns: 54px minmax(0, 1fr) 38px;
+    grid-template-columns: 54px minmax(0, 1fr) 36px;
     grid-template-rows: auto auto;
     gap: 3px 8px;
     padding: 10px 4px;
   }
   .rail { grid-column: 1; grid-row: 1; }
-  .rail time { font-size: 17px; }
+  .rail time { font-size: 21px; }
   .rail .wd { display: none; }
   .status {
     grid-column: 1; grid-row: 2;
@@ -779,17 +841,18 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     display: grid;
     grid-template-rows: 1fr 1fr;
     align-items: center; justify-items: center;
-    align-self: stretch; gap: 0;
+    align-self: stretch; gap: 3px;
   }
   .score .sc:first-child { grid-row: 1; }
   .score .sc:last-child { grid-row: 2; }
   .score .dash { display: none; }
-  .score .sc { font-size: 18px; }
+  .score .sc, .score .vs::before, .score .vs::after { min-width: 32px; height: 30px; padding: 0 4px; }
+  .score .sc { font-size: 23px; }
   .score .vs {
-    grid-row: 1 / 3; align-self: center; justify-self: center;
-    font-size: 11px;
+    grid-row: 1 / 3; align-self: stretch; justify-self: center;
+    flex-direction: column; justify-content: space-around; gap: 3px;
   }
-  .logo { width: 22px; height: 22px; }
+  .logo { width: 25px; height: 25px; padding: 3px; }
   .tname { font-size: 13.5px; }
   .lg-head h2 { font-size: 18px; }
   .lg-en { display: none; }
@@ -830,7 +893,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .side.home .tname { flex: 0 1 auto; }
   .match { min-width: 0; }
 
-  .masthead h1 { font-size: 28px; }
+  .masthead h1 { font-size: 18px; }
+  .hero-date { font-size: 52px; }
   .day-hero { flex-wrap: wrap; padding: 14px 2px 16px; gap: 10px; }
   .hero-main { flex-wrap: wrap; gap: 10px; }
   .hero-count { padding-bottom: 0; }
@@ -854,18 +918,22 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .seg { border-radius: 7px; min-width: 40px; min-height: 36px; }
 .seg.on { background: var(--card); color: var(--paper); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
 
-.wday { margin: 0 0 16px; background: var(--card); border-radius: 12px; padding: 0 12px; overflow: hidden; }
-.wday-head {
-  font-family: var(--body); font-size: 11px; color: var(--muted);
-  padding: 6px 4px; border-bottom: 1px solid var(--line-soft); font-weight: normal;
+.wday {
+  margin: 0 0 18px; background: var(--board); color: var(--paper);
+  border-radius: 4px; padding: 0 12px; overflow: hidden;
+  box-shadow: 0 0 0 1px var(--board-edge), 0 3px 0 var(--board-edge);
 }
-.wday-head b { font-family: var(--display); font-size: 14px; color: var(--paper); }
+.wday-head {
+  font-family: var(--body); font-size: 12px; color: var(--muted);
+  padding: 8px 4px 6px; border-bottom: 2px solid var(--groove); font-weight: normal;
+}
+.wday-head b { font-family: var(--num); font-size: 20px; font-weight: 700; color: var(--paper); margin-right: 4px; }
 .wday-head .fav { font-style: normal; color: var(--accent); }
 
 /* 紧凑单行行：周视图专用（全宽度一致，高优先级盖过移动端两行布局） */
 .match.compact {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) 34px minmax(0, 1fr) 48px;
+  grid-template-columns: 42px minmax(0, 1fr) 52px minmax(0, 1fr) 48px;
   grid-template-rows: auto;
   gap: 2px 4px;
   align-items: center;
@@ -873,7 +941,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 .match.compact .side { gap: 4px; }
 .match.compact .rail { grid-column: 1; grid-row: 1; }
-.match.compact .rail time { font-size: 13px; }
+.match.compact .rail time { font-size: 16px; }
 .match.compact .wd { display: block; font-size: 8px; letter-spacing: 0; }
 .match.compact .side.home {
   grid-column: 2; grid-row: 1;
@@ -885,16 +953,18 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   display: flex; flex-direction: row; align-items: baseline; justify-content: center;
   gap: 3px;
 }
-.match.compact .score .sc { grid-row: auto; min-width: 0; font-size: 13px; }
-.match.compact .score .dash { display: inline; font-size: 11px; }
-.match.compact .score .vs { grid-row: auto; font-size: 10px; }
+.match.compact .score { align-items: center; }
+.match.compact .score .sc, .match.compact .score .vs::before, .match.compact .score .vs::after { min-width: 20px; height: 22px; padding: 0 3px; border-radius: 2px; }
+.match.compact .score .sc { grid-row: auto; font-size: 16px; }
+.match.compact .score .dash { display: none; }
+.match.compact .score .vs { grid-row: auto; flex-direction: row; gap: 3px; }
 .match.compact .status {
   grid-column: 5; grid-row: 1; justify-content: flex-end;
   font-size: 9px; letter-spacing: 0; gap: 3px;
 }
 .match.compact .tname,
 .match.compact .side.home .tname { flex: 1 1 auto; font-size: 12px; }
-.match.compact .logo { width: 14px; height: 14px; }
+.match.compact .logo { width: 18px; height: 18px; padding: 2px; }
 .match.compact .star { min-width: 44px; min-height: 44px; }
 
 /* 超窄屏紧凑行：藏队徽换队名空间 */
@@ -905,13 +975,13 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* ---------- 紧凑周视图：小屏改两行（同日视图），星标保持 44×44 真实点击盒 ---------- */
 @media (max-width: 640px) {
   .match.compact {
-    grid-template-columns: 54px minmax(0, 1fr) 34px;
+    grid-template-columns: 54px minmax(0, 1fr) 30px;
     grid-template-rows: auto auto;
     gap: 3px 8px;
     padding: 8px 4px;
   }
   .match.compact .rail { grid-column: 1; grid-row: 1; }
-  .match.compact .rail time { font-size: 15px; }
+  .match.compact .rail time { font-size: 19px; }
   .match.compact .wd { display: block; font-size: 9px; letter-spacing: 0; }
   .match.compact .status {
     grid-column: 1; grid-row: 2;
@@ -926,13 +996,14 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     grid-column: 3; grid-row: 1 / 3;
     display: grid; grid-template-rows: 1fr 1fr;
     align-items: center; justify-items: center;
-    align-self: stretch; gap: 0;
+    align-self: stretch; gap: 3px;
   }
-  .match.compact .score .sc { grid-row: auto; min-width: 0; font-size: 16px; }
+  .match.compact .score .sc, .match.compact .score .vs::before, .match.compact .score .vs::after { min-width: 26px; height: 24px; }
+  .match.compact .score .sc { grid-row: auto; font-size: 18px; }
   .match.compact .score .dash { display: none; }
   .match.compact .score .vs {
-    grid-row: 1 / 3; align-self: center; justify-self: center;
-    font-size: 11px;
+    grid-row: 1 / 3; align-self: stretch; justify-self: center;
+    flex-direction: column; justify-content: space-around;
   }
   .match.compact .tname,
   .match.compact .side.home .tname { flex: 1 1 auto; font-size: 13px; }
