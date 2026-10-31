@@ -10,7 +10,7 @@ import { tonightDayKey, tonightRange, summarizeTonight } from './src/domain/toni
 /* 页面控制器：偏好、加载、订阅、轮询。DOM 由 React 组件管理。 */
 'use strict';
 
-const LIVE_POLL_MS = 60e3;
+const LIVE_POLL_MS = 30e3;
 const STRIP_LEN = 7;
 const LS_ENABLED = 'fs1.enabled';
 const LS_DAY = 'fs1.day';
@@ -362,22 +362,30 @@ function dayDotState(dayKey) {
 }
 
 /* 每分钟发布时钟更新，React 保留比赛行和焦点；仅在开赛或直播时刷新数据。 */
-/* 已过开赛时间却仍是“未开赛”的比赛（页面在赛前打开并放置）：需要强制刷新才能进入直播。
-   只看开赛后 3 小时内，延期/未更新的比赛不会永远轮询。 */
+/* 已过开赛时间却仍是“未开赛”的比赛需要刷新才能进入直播：开赛后 3 小时内持续轮询；
+   超过 3 小时但数据是开赛前抓的（如旧快照），也刷新一次。刷新后数据晚于开赛，延期比赛不会永远轮询。 */
 const KICKOFF_GRACE_MS = 3 * 3600e3;
+
+function awaitingKickoff(m, now = Date.now()) {
+  if (!m || m.status !== 'SCHEDULED') return false;
+  const t = new Date(m.start).getTime();
+  return Number.isFinite(t) && t <= now && (now - t < KICKOFF_GRACE_MS || !(m.fetchedAt > t));
+}
+
+/* 直播轮询的目标：进行中，或已过开赛时间仍显示未开赛 */
+function liveTargets() {
+  const now = Date.now();
+  return currentMatches().filter((m) => m && (m.live || awaitingKickoff(m, now)));
+}
 
 function kickoffPassed() {
   const now = Date.now();
-  return currentMatches().some((m) => {
-    if (!m || m.status !== 'SCHEDULED') return false;
-    const t = new Date(m.start).getTime();
-    return Number.isFinite(t) && t <= now && now - t < KICKOFF_GRACE_MS;
-  });
+  return currentMatches().some((m) => awaitingKickoff(m, now));
 }
 
 function refreshIfKickoffPassed() {
-  if (document.hidden || state.loading || !kickoffPassed()) return;
-  reload({ force: true });
+  if (document.hidden || state.loading || liveTimer || !kickoffPassed()) return;
+  pollLive();
 }
 
 function minuteTick() {
@@ -541,6 +549,7 @@ async function reload(opts = {}) {
   try {
     const data = await loadDayVisible(state.dayKey, {
       force: opts.force,
+      live: opts.live,
       onUpdate: (fresh) => {
         /* 后台重验完成：静默替换为新数据 */
         if (seq !== loadSeq || state.dayKey !== fresh.dayKey) return;
@@ -595,6 +604,7 @@ async function reloadRange(view, opts = {}) {
       try {
         const d = await loadDayVisible(key, {
           force: opts.force,
+          live: opts.live,
           onUpdate: (fresh) => {
             /* 后台重验完成：把该天替换为新数据 */
             if (seq !== loadSeq || state.view !== view) return;
@@ -646,11 +656,22 @@ function currentMatches() {
     : displayedDay(state.data)?.matches || [];
 }
 
+/* 固定节奏：间隔从上一轮开始计时，请求耗时不再叠加到下一轮 */
+let lastLivePoll = 0;
+
+function pollLive() {
+  clearTimeout(liveTimer);
+  liveTimer = null;
+  lastLivePoll = Date.now();
+  return reload({ force: true, live: liveTargets() });
+}
+
 function scheduleLivePoll() {
   clearTimeout(liveTimer);
-  if (!active || document.hidden) return;
-  const hasLive = currentMatches().some((m) => m.live);
-  if (hasLive) liveTimer = setTimeout(() => reload({ force: true }), LIVE_POLL_MS);
+  liveTimer = null;
+  if (!active || document.hidden || !liveTargets().length) return;
+  const wait = Math.max(1000, LIVE_POLL_MS - (Date.now() - lastLivePoll));
+  liveTimer = setTimeout(pollLive, wait);
 }
 
 /* 预取日期条：把窗口 7 天涉及的「联赛×月份」全部暖机（数据层按月缓存，天然去重）。
@@ -847,9 +868,9 @@ function followSearchResult(id) {
   if (entry) toggleFollow({ name: entry.name, teamId: entry.id, leagues: entry.leagues });
 }
 function onVisibilityChange() {
-  if (document.hidden) clearTimeout(liveTimer);
+  if (document.hidden) { clearTimeout(liveTimer); liveTimer = null; }
   else if (syncTonight()) reload();
-  else if (currentMatches().some((m) => m.live) || kickoffPassed()) reload({ force: true });
+  else if (liveTargets().length) pollLive();
 }
 function onOnline() {
   if (syncTonight()) { reload(); return; }
