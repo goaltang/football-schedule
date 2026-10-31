@@ -168,9 +168,9 @@ PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生
 
 ## 部署与迁移
 
-合并迁移 PR 前，在仓库 **Settings → Pages → Source** 将发布源设为 **GitHub Actions**。若已先合并，切换来源后手动运行 `deploy` 工作流即可发布。`deploy.yml` 安装依赖、运行回归测试、构建 `dist/` 并发布。
+合并迁移 PR 前，在仓库 **Settings → Pages → Source** 将发布源设为 **GitHub Actions**。若已先合并，切换来源后手动运行 `deploy` 工作流即可发布。`deploy.yml` 在推送 `main` 和每 3 小时定时运行：安装依赖、运行测试、生成最新赛程快照、构建 `dist/` 并发布。
 
-赛程快照继续每三小时更新。快照工作流提交数据后显式构建并发布，确保机器人提交不会漏掉部署。
+快照只随产物发布，不再提交回仓库。本地运行 `npm run snapshot` 产生的 `snapshot/` 改动一般不用提交。
 
 构建时复制 `logos/`、`icons/` 和 `snapshot/`。`vite.config.ts` 将真实 JS/CSS 文件清单写入产物 `sw.js`，缓存版本由 HTML 和资源清单生成。以后无需手动给脚本加 `?v=`。
 
@@ -180,7 +180,7 @@ PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生
 ## 常见改动
 
 - **加/减赛事**：`config.js` 里 `LEAGUES` 增删一行（`id` 为 ESPN 赛事标识，如 `por.1` 葡超、`fifa.friendly` 国际友谊赛）；国家队赛事加 `group: 'national'`。
-  增加后跑一次 `node tools/refresh-logos.js` 把新赛事队徽下载到本地；仅刷新国家队可运行 `node tools/refresh-logos.js --national`。再运行 `node tools/build-snapshot.js` 和 `node tools/build-teams-snapshot.js` 更新赛程和球队名单，部署后由原有定时工作流继续每 3 小时更新。
+  增加后跑一次 `node tools/refresh-logos.js` 把新赛事队徽下载到本地；仅刷新国家队可运行 `node tools/refresh-logos.js --national`。再运行 `node tools/build-snapshot.js` 和 `node tools/build-teams-snapshot.js` 更新赛程和球队名单，部署时会自动生成最新快照，此后每 3 小时更新。
 - **球队中文名**：`team-names.js` 增加一行；大小写、音调、`FC`/`AS` 前缀后缀等写法差异会自动归一，
   不用为同一支球队写多条。查漏有两个途径：访问 `/football-schedule/tools/zh-coverage.html`，一次列出所有联赛里还没收录的队名
   （附可直接粘贴的空条目）；或平时看球时留意浏览器 console 的“未收录中文名”提示。

@@ -3,12 +3,12 @@ import { fileURLToPath } from 'node:url';
 /* 生成赛程快照：snapshot/schedule.json
  *
  * 新设备首次打开时本地没有缓存，若浏览器直连 ESPN 慢或不通就会一直“加载中”。
- * 本脚本由 GitHub Actions 定时运行（.github/workflows/refresh-snapshot.yml），
+ * 本脚本由 GitHub Actions 在每次发布时运行（.github/workflows/deploy.yml，含每 3 小时定时发布），
  * 把所有赛事「上月 ~ 后两个月」的整月赛程拉下来，按 data.js 同一套归一化写成与本地缓存
  * 同格式的条目，随页面同源部署；前端冷启动时先用它出数据，再在后台联网更新。
  *
  * - 某联赛某月抓取失败：沿用上一份快照里的旧条目，不让一次抖动清空数据
- * - 内容与上一份完全一致（忽略时间戳）且上一份不超过 MAX_AGE_MS：不写文件，避免无意义提交
+ * - 内容与上一份完全一致（忽略时间戳）且上一份不超过 MAX_AGE_MS：不写文件，沿用原时间戳
  * - 一个条目都没抓到：以非 0 退出，保留原快照
  */
 'use strict';
