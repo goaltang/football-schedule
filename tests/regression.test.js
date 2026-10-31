@@ -86,7 +86,7 @@ test('tonight loads both dates and keeps a completed early update before the ini
   assert.match(h.elements['#list'].innerHTML, /09\.30.*晚间/);
   assert.match(h.elements['#list'].innerHTML, /10\.01.*次日凌晨/);
   assert.equal(h.call('currentMatches().length'), 2);
-  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  assert.match(h.hero(), /进行中比分约每 30 秒自动更新/);
   h.call(`nightUpdates.get('2026-10-01')({ dayKey: '2026-10-01', matches: [], failed: ['eng.1'], fetchedAt: Date.now() })`);
   assert.equal(h.call('getSnapshot().data.matches.length'), 1);
   assert.match(h.elements['#list'].innerHTML, /英超赛程未能加载/);
@@ -162,7 +162,7 @@ test('loading an unrelated night date does not claim that a fresh live score is 
   h.call(`state.view = 'tonight'; state.dayKey = '2026-09-30'; state.loading = false;
     state.tonightDays = [{ dayKey: '2026-09-30', matches: [fixture], failed: [], fetchedAt: Date.now() },
       { dayKey: '2026-10-01', matches: [outside], pending: true, failed: [] }]; publish()`);
-  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  assert.match(h.hero(), /进行中比分约每 30 秒自动更新/);
   assert.doesNotMatch(h.hero(), /正在更新比分/);
   h.call('state.tonightDays[0].pending = true; publish()');
   assert.match(h.hero(), /正在更新比分/);
@@ -603,6 +603,104 @@ test('failed live refresh preserves score age even when the fallback snapshot is
   assert.equal(recovered.matches[0].home.score, 2);
 });
 
+function liveScoreboard(events) {
+  return { events: events.map(([id, start, state, home, away]) => ({
+    id, date: start, status: { type: { state }, displayClock: "35'" },
+    competitions: [{ competitors: [
+      { homeAway: 'home', team: { id: '359', displayName: 'Arsenal' }, score: String(home) },
+      { homeAway: 'away', team: { id: '99', displayName: 'Away' }, score: String(away) },
+    ] }],
+  })) };
+}
+
+function liveDayHarness(fetchedAt = Date.now() - 60e3) {
+  const h = harness();
+  const day = h.call('dayKeyOf(new Date())');
+  const start = new Date(Date.now() - 30 * 60e3).toISOString();
+  const live = { ...match('live-score', 'eng.1', 1), start, status: 'LIVE', live: true, home: { name: 'Arsenal', teamId: '359', score: 0 } };
+  const other = { ...match('other-game', 'eng.1', 1), start };
+  const ym = h.call(`etBucketOf(new Date('${start}')).slice(0, 6)`);
+  for (const month of h.call(`monthsForDay('${day}')`)) {
+    h.storage.setItem(`fs1|m|eng.1|${month}`, JSON.stringify({ fetchedAt, league: { id: 'eng.1', logo: '' },
+      events: month === ym ? [live, other] : [] }));
+  }
+  return { h, day, live, ym, fetchedAt };
+}
+
+test('live polling refreshes only the live match day without the month feed or snapshot', async () => {
+  const { h, day, live, fetchedAt } = liveDayHarness();
+  const urls = [];
+  h.setFetch((url) => {
+    urls.push(String(url));
+    return { ok: true, json: async () => liveScoreboard([[live.id, live.start, 'in', 2, 1]]) };
+  });
+  const result = await h.call(`loadDay('${day}', { leagues: ['eng.1'], force: true, live: [${JSON.stringify(live)}] })`);
+  const bucket = h.call(`etBucketOf(new Date('${live.start}'))`);
+  assert.deepEqual(urls.map((url) => url.replace(/^.*soccer\//, '')), [`eng.1/scoreboard?dates=${bucket}`]);
+  const scored = result.matches.find((m) => m.id === live.id);
+  assert.equal(scored.home.score, 2);
+  assert.ok(scored.fetchedAt > fetchedAt);
+  assert.equal(scored.refreshFailed, false);
+  assert.equal(result.matches.find((m) => m.id === 'other-game').fetchedAt, fetchedAt);
+});
+
+test('a failed live refresh keeps the last score and marks only the targeted match', async () => {
+  const { h, day, live } = liveDayHarness();
+  const urls = [];
+  h.setFetch((url) => { urls.push(String(url)); throw new Error('offline'); });
+  const result = await h.call(`loadDay('${day}', { leagues: ['eng.1'], force: true, live: [${JSON.stringify(live)}] })`);
+  assert.ok(urls.every((url) => /dates=\d{8}$/.test(url)));
+  assert.equal(result.matches.find((m) => m.id === live.id).refreshFailed, true);
+  assert.equal(result.matches.find((m) => m.id === live.id).home.score, 0);
+  assert.equal(result.matches.find((m) => m.id === 'other-game').refreshFailed, false);
+});
+
+test('a live match missing from the day feed falls back to the month feed once', async () => {
+  const { h, day, live, ym } = liveDayHarness();
+  const urls = [];
+  h.setFetch((url) => {
+    urls.push(String(url));
+    return { ok: true, json: async () => liveScoreboard(String(url).includes(`dates=${ym}&`) ? [[live.id, live.start, 'post', 3, 1]] : []) };
+  });
+  const result = await h.call(`loadDay('${day}', { leagues: ['eng.1'], force: true, live: [${JSON.stringify(live)}] })`);
+  assert.equal(urls.length, 2);
+  assert.match(urls[1], new RegExp(`dates=${ym}&limit=1000`));
+  assert.equal(result.matches.find((m) => m.id === live.id).status, 'FT');
+});
+
+test('an older schedule snapshot does not overwrite a fresher live score', async () => {
+  const { h, day, live, ym } = liveDayHarness();
+  h.setFetch(() => ({ ok: true, json: async () => liveScoreboard([[live.id, live.start, 'in', 2, 1]]) }));
+  await h.call(`loadDay('${day}', { leagues: ['eng.1'], force: true, live: [${JSON.stringify(live)}] })`);
+  const snapshotEvents = [{ ...live, home: { ...live.home, score: 1 } }];
+  h.setFetch(() => ({ ok: true, json: async () => ({ months: { [`eng.1|${ym}`]: {
+    fetchedAt: Date.now() - 1000, league: { id: 'eng.1', logo: '' }, events: snapshotEvents } } }) }));
+  await h.call('seedFromSnapshot({ force: true })');
+  assert.equal(h.call(`readCache('eng.1', '${ym}').events.find((m) => m.id === '${live.id}').home.score`), 2);
+});
+
+test('scheduled matches past kickoff are polled until refreshed data postdates kickoff', () => {
+  const h = harness([], true);
+  const start = Date.now() - 5 * 3600e3;
+  h.context.fixture = { ...match('late', 'eng.1', 1), start: new Date(start).toISOString(), fetchedAt: start - 3600e3 };
+  h.call('state.loading = false; state.data = { matches: [fixture], failed: [], fetchedAt: Date.now() }');
+  assert.deepEqual([...h.call('liveTargets().map((m) => m.id)')], ['late']);
+  h.call(`fixture.fetchedAt = ${start + 3600e3}`);
+  assert.equal(h.call('liveTargets().length'), 0);
+  h.call(`fixture.start = new Date(Date.now() - 3600e3).toISOString()`);
+  assert.equal(h.call('liveTargets().length'), 1);
+});
+
+test('live polling keeps a fixed cadence measured from the previous poll start', () => {
+  const h = harness([], true);
+  h.context.fixture = { ...match('live', 'eng.1', 1), status: 'LIVE', live: true, fetchedAt: Date.now() };
+  h.call(`state.data = { matches: [fixture], failed: [], fetchedAt: Date.now() };
+    const delays = []; setTimeout = (fn, ms) => { delays.push(ms); return 1; };
+    lastLivePoll = Date.now() - 20e3; scheduleLivePoll()`);
+  const delay = h.call('delays[0]');
+  assert.ok(delay > 9e3 && delay <= 10e3, `delay ${delay}`);
+});
+
 test('live score hints keep the oldest visible score time across day and week views', () => {
   const h = harness([], true);
   const now = new Date('2026-10-01T12:00:00').getTime();
@@ -626,7 +724,7 @@ test('live score hints keep the oldest visible score time across day and week vi
   assert.equal(h.elements['#updated'].textContent, '比分更新于 9/30 12:00');
   h.call(`state.followed = [mkFollowRecord('86', 'Real Madrid', nameKeys(freshLive.home), ['esp.1'])]; state.onlyFollowed = true; publish()`);
   assert.equal(h.elements['#updated'].textContent, '比分更新于 12:00');
-  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  assert.match(h.hero(), /进行中比分约每 30 秒自动更新/);
   assert.doesNotMatch(h.hero(), /比分可能已延迟/);
 });
 
@@ -644,7 +742,7 @@ test('score hints report affected live games while retaining the previous result
   assert.equal(h.elements['#updated'].textContent, before);
   h.call(`state.loading = false; fixture.refreshFailed = false; other.status = 'FT'; other.live = false;
     other.refreshFailed = true; publish()`);
-  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  assert.match(h.hero(), /进行中比分约每 30 秒自动更新/);
   assert.doesNotMatch(h.hero(), /比分更新失败/);
   h.call('fixture.status = "FT"; fixture.live = false; publish()');
   assert.doesNotMatch(h.hero(), /id="scoreUpdate"/);
