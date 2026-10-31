@@ -89,6 +89,7 @@ export function LeagueFilters(props: ViewProps) {
           <svg className="filter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
             <path d="M4 7h4m4 0h8M4 17h8m4 0h4" /><circle cx="10" cy="7" r="2" /><circle cx="14" cy="17" r="2" />
           </svg>
+          <span className="filter-label">赛事</span>
           <span className="filter-summary">{summary}</span>
           <span className="filter-count" id="filterCount">{selected.length}</span>
         </button>
