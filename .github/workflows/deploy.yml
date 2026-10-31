@@ -1,8 +1,11 @@
+# 推送 main 或每 3 小时定时：测试 → 生成最新快照 → 构建 → 发布到 GitHub Pages。
+# 快照只随产物发布，不再提交回仓库；仓库里的 snapshot/ 仅作本地开发与抓取失败时的底稿。
 name: deploy
 on:
   push:
     branches: [main]
-    paths-ignore: ['snapshot/**']
+  schedule:
+    - cron: '17 */3 * * *'
   workflow_dispatch:
 permissions:
   contents: read
@@ -25,6 +28,33 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --test tests/regression.test.js
+      # 定时任务代码没变，跳过浏览器测试
+      - if: github.event_name != 'schedule'
+        run: npx playwright install --with-deps chromium
+      - if: github.event_name != 'schedule'
+        run: npm run build && npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: test-results/
+          retention-days: 7
+      # 以线上正在发布的快照为底稿：某联赛抓取失败时沿用上一份，而不是仓库里的旧副本。
+      - name: Restore published snapshot
+        run: |
+          for f in schedule teams; do
+            if curl -fsSL --retry 3 -o "/tmp/$f.json" "https://goaltang.github.io/football-schedule/snapshot/$f.json" \
+              && node -e "const j=JSON.parse(require('fs').readFileSync('/tmp/$f.json','utf8'));if(!j.months&&!j.leagues)process.exit(1)"; then
+              cp "/tmp/$f.json" "snapshot/$f.json"
+            else
+              echo "::warning::published $f.json unavailable; using repository copy"
+            fi
+          done
+      # ESPN 不可用时不阻塞发布，沿用底稿
+      - run: node tools/build-snapshot.js
+        continue-on-error: true
+      - run: node tools/build-teams-snapshot.js
+        continue-on-error: true
       - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
