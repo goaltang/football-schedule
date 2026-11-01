@@ -1,0 +1,92 @@
+[
+  {
+    "id": "2026-11-02-changelog",
+    "date": "2026-11-02",
+    "title": "新增更新日志",
+    "summary": "页面底部可以查看网站的重要更新，有新内容时入口会亮起小红点。"
+  },
+  {
+    "id": "pr-18",
+    "date": "2026-11-01",
+    "title": "工具条收成一行",
+    "summary": "日期、视图和筛选等按钮合并到同一行，界面更简洁，手机上也更省空间。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/18"
+  },
+  {
+    "id": "pr-17",
+    "date": "2026-11-01",
+    "title": "实时比分更新更快",
+    "summary": "进行中的比赛按比赛日每 30 秒刷新一次比分，延迟更低也更稳定。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/17"
+  },
+  {
+    "id": "pr-15",
+    "date": "2026-10-31",
+    "title": "记分牌风格改版",
+    "summary": "赛程页换成球场翻牌记分牌的视觉风格，比分变化更醒目。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/15"
+  },
+  {
+    "id": "pr-14",
+    "date": "2026-10-28",
+    "title": "球队赛程加进日历",
+    "summary": "关注的球队可以一键订阅到手机或电脑的系统日历，比赛改期会自动同步。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/14"
+  },
+  {
+    "id": "pr-12",
+    "date": "2026-10-08",
+    "title": "筛选与关注改为弹窗",
+    "summary": "赛事筛选改为弹窗，关注管理改为侧边抽屉，不再挤占赛程列表。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/12"
+  },
+  {
+    "id": "pr-11",
+    "date": "2026-10-02",
+    "title": "关注预览直达比赛",
+    "summary": "在关注预览里点一场比赛，会跳到对应日期并定位、聚焦到这场比赛。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/11"
+  },
+  {
+    "id": "pr-9",
+    "date": "2026-10-02",
+    "title": "新增“今晚”赛程",
+    "summary": "一键查看今晚 18:00 到次日 06:00 的跨日比赛，熬夜看球更方便。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/9"
+  },
+  {
+    "id": "pr-8",
+    "date": "2026-10-01",
+    "title": "比分更新提示更清楚",
+    "summary": "显示比分最近更新时间，更新失败时给出提示并支持重试。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/8"
+  },
+  {
+    "id": "pr-6",
+    "date": "2026-10-01",
+    "title": "只看关注球队",
+    "summary": "可以只看关注球队未来七天的赛程。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/6"
+  },
+  {
+    "id": "pr-7",
+    "date": "2026-09-30",
+    "title": "赛事选择器改版",
+    "summary": "联赛按分组网格排列，支持批量选择、桌面端展开收起，并适配手机布局。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/7"
+  },
+  {
+    "id": "pr-3",
+    "date": "2026-09-30",
+    "title": "迁移到 React 并支持 PWA",
+    "summary": "页面重写为 React + Vite，加载更快，可以添加到手机主屏幕离线使用。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/3"
+  },
+  {
+    "id": "pr-2",
+    "date": "2026-09-30",
+    "title": "国家队赛程与球队搜索",
+    "summary": "新增国家队赛事，支持搜索球队并跨赛事关注。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/2"
+  }
+]

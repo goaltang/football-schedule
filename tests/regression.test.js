@@ -2165,3 +2165,42 @@ test('exporting follows merges calendars without duplicating shared matches', ()
   assert.equal((merged.match(/BEGIN:VEVENT/g) || []).length, 2);
   assert.match(merged, /X-WR-CALNAME:赛程 · 我的关注/);
 });
+
+const changelogDomain = await import('../src/domain/changelog.js');
+const { Changelog, ChangelogList, changelogEntries } = await tsImport('../src/components/Changelog.tsx', import.meta.url);
+
+test('changelog data is valid, newest first and written in Chinese', () => {
+  assert.deepEqual(changelogDomain.validateEntries(changelogEntries), []);
+  for (const entry of changelogEntries) assert.match(entry.title + entry.summary, /[\u4e00-\u9fff]/);
+  assert.ok(changelogDomain.validateEntries([{ id: 'a', date: '2026-01-01', title: 't', summary: 's' }, { id: 'b', date: '2026-02-01', title: 't', summary: 's' }])
+    .some((problem) => problem.includes('newest first')));
+  assert.ok(changelogDomain.validateEntries([{ id: 'a', date: '2026/01/01', title: '', summary: 's', pr: 'x' }]).length >= 3);
+});
+
+test('changelog unread state follows the latest entry and survives storage failures', () => {
+  const entries = [{ id: 'new' }, { id: 'old' }];
+  assert.equal(changelogDomain.hasUnread(entries, ''), true);
+  assert.equal(changelogDomain.hasUnread(entries, 'old'), true);
+  assert.equal(changelogDomain.hasUnread(entries, 'new'), false);
+  assert.equal(changelogDomain.hasUnread([], ''), false);
+  const store = new Map();
+  const memory = { getItem: (key) => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) };
+  assert.equal(changelogDomain.writeSeen(memory, 'new'), true);
+  assert.equal(changelogDomain.readSeen(memory), 'new');
+  const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new DOMException('full', 'QuotaExceededError'); } };
+  assert.equal(changelogDomain.writeSeen(broken, 'new'), false);
+  assert.equal(changelogDomain.readSeen(broken), '');
+  assert.equal(changelogDomain.readSeen(null), '');
+});
+
+test('changelog entry point and list render accessibly', () => {
+  const button = renderToStaticMarkup(createElement(Changelog));
+  assert.match(button, /id="changelogToggle"/);
+  assert.match(button, /aria-haspopup="dialog"/);
+  assert.match(button, /aria-label="更新日志，有新内容"/);
+  assert.match(button, /changelog-dot/);
+  const list = renderToStaticMarkup(createElement(ChangelogList, { items: [{ id: 'x', date: '2026-10-28', title: '加进日历', summary: '订阅日历', pr: 'https://github.com/goaltang/football-schedule/pull/14' }] }));
+  assert.match(list, /<time class="changelog-date" datetime="2026-10-28">2026\.10\.28<\/time>/i);
+  assert.match(list, /aria-label="查看 PR #14：加进日历（新窗口打开）"/);
+  assert.match(list, /rel="noopener noreferrer"/);
+});
