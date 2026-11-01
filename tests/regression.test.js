@@ -25,7 +25,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 // The VM isolates storage, clock and requests. React views are the same components
 // used by the browser; no legacy HTML renderer is kept for the tests.
 const scriptSource = (file) => fs.readFileSync(path.join(root, file), 'utf8')
-  .replace(/^import .*?;\n/gm, '').replace(/^export \{[\s\S]*?\};?\n?/gm, '');
+  // 兼容单行、多行和纯副作用 import
+  .replace(/^import\s+(?:['"][^'"\n]+['"]|[^;'"]*?\bfrom\s*['"][^'"\n]+['"])\s*;?[ \t]*\n/gm, '').replace(/^export \{[\s\S]*?\};?\n?/gm, '');
 const dataSource = scriptSource('data.js');
 const appSource = scriptSource('app.js');
 
@@ -2193,4 +2194,24 @@ test('reconnecting tolerates view data without a failed list', () => {
     let bareReconnects = 0; reload = () => { bareReconnects++; }`);
   assert.doesNotThrow(() => h.call('onOnline()'));
   assert.equal(h.call('bareReconnects'), 0);
+});
+
+test('date shortcuts work from match rows and buttons but stay out of inputs and dialogs', () => {
+  const h = harness([], true);
+  const target = (hit) => ({ matches: () => false, closest: (sel) => (hit && sel.includes(hit) ? {} : null) });
+  h.context.kt = target;
+  const start = h.call('state.dayKey');
+  h.call(`onKeyDown({ key: 'ArrowRight', target: kt(null), preventDefault() {} })`);
+  assert.equal(h.call('state.dayKey'), h.call(`addDays(${JSON.stringify(start)}, 1)`));
+  for (const hit of ['input', 'dialog', 'tablist']) {
+    h.call(`onKeyDown({ key: 'ArrowRight', target: kt(${JSON.stringify(hit)}), preventDefault() {} })`);
+    assert.equal(h.call('state.dayKey'), h.call(`addDays(${JSON.stringify(start)}, 1)`));
+  }
+});
+
+test('import stripping handles multi-line and side-effect imports', () => {
+  const strip = (src) => src.replace(/^import\s+(?:['"][^'"\n]+['"]|[^;'"]*?\bfrom\s*['"][^'"\n]+['"])\s*;?[ \t]*\n/gm, '');
+  assert.equal(strip("import {\n  a,\n  b,\n} from './x.js';\nimport './y.js';\nimport z from \"z\"\nconst k = 1;\n"), 'const k = 1;\n');
+  assert.doesNotMatch(dataSource, /^import /m);
+  assert.doesNotMatch(appSource, /^import /m);
 });
