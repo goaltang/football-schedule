@@ -179,6 +179,10 @@ PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生
 
 ## 常见改动
 
+- **更新日志**：合并较大的、用户能感知到的功能或改动时，在 `src/changelog.json` 最前面加一条
+  `{"id": "pr-<编号>", "date": "YYYY-MM-DD", "title": "短标题", "summary": "一两句中文说明", "pr": "https://github.com/goaltang/football-schedule/pull/<编号>"}`。
+  按日期倒序，`id` 不能重复（没有 PR 时省略 `pr`，`id` 用 `日期-关键词`）。小修复、CI 和文档改动不用记。新增条目后页面底部“更新日志”会对老用户亮起小红点；`npm test` 会校验格式。
+
 - **加/减赛事**：`config.js` 里 `LEAGUES` 增删一行（`id` 为 ESPN 赛事标识，如 `por.1` 葡超、`fifa.friendly` 国际友谊赛）；国家队赛事加 `group: 'national'`。
   增加后跑一次 `node tools/refresh-logos.js` 把新赛事队徽下载到本地；仅刷新国家队可运行 `node tools/refresh-logos.js --national`。再运行 `node tools/build-snapshot.js` 和 `node tools/build-teams-snapshot.js` 更新赛程和球队名单，部署时会自动生成最新快照，此后每 3 小时更新。
 - **球队中文名**：`team-names.js` 增加一行；大小写、音调、`FC`/`AS` 前缀后缀等写法差异会自动归一，
