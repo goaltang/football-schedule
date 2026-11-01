@@ -2165,3 +2165,32 @@ test('exporting follows merges calendars without duplicating shared matches', ()
   assert.equal((merged.match(/BEGIN:VEVENT/g) || []).length, 2);
   assert.match(merged, /X-WR-CALNAME:赛程 · 我的关注/);
 });
+
+test('writeCache prunes and retries once when localStorage quota is exceeded', () => {
+  const now = new Date();
+  const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const old = Array.from({ length: 130 }, (_, i) => [`fs1|m|eng.1|${1990 + Math.floor(i / 12)}${String(i % 12 + 1).padStart(2, '0')}`, JSON.stringify({ fetchedAt: i })]);
+  const h = harness(old);
+  const set = h.storage.setItem;
+  let quotaErrors = 0;
+  h.storage.setItem = (key, value) => {
+    if (h.storage.length >= 130 && h.storage.getItem(key) === null) { quotaErrors++; const e = new Error('full'); e.name = 'QuotaExceededError'; throw e; }
+    set(key, value);
+  };
+  h.context.cacheYm = ym;
+  assert.doesNotThrow(() => h.call('writeCache("esp.1", cacheYm, { fetchedAt: Date.now(), events: [] })'));
+  assert.equal(quotaErrors, 1);
+  assert.ok(h.storage.getItem(`fs1|m|esp.1|${ym}`));
+  assert.ok(h.storage.length <= 128);
+  h.storage.setItem = () => { throw new Error('always full'); };
+  assert.doesNotThrow(() => h.call('writeCache("ita.1", cacheYm, { fetchedAt: Date.now(), events: [] })'));
+});
+
+test('reconnecting tolerates view data without a failed list', () => {
+  const h = harness([], true);
+  h.call(`state.view = 'day'; state.loading = false; state.error = null;
+    state.data = { matches: [], fetchedAt: Date.now() };
+    let bareReconnects = 0; reload = () => { bareReconnects++; }`);
+  assert.doesNotThrow(() => h.call('onOnline()'));
+  assert.equal(h.call('bareReconnects'), 0);
+});

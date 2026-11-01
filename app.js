@@ -875,7 +875,7 @@ function onVisibilityChange() {
 function onOnline() {
   if (syncTonight()) { reload(); return; }
   const d = state.view === 'tonight' ? summarizeTonight(state.tonightDays, state.dayKey) : state.data;
-  if (!state.loading && (state.error || !d || !d.fetchedAt || d.pending || d.failed.length)) reload({ force: true });
+  if (!state.loading && (state.error || !d || !d.fetchedAt || d.pending || (d.failed && d.failed.length))) reload({ force: true });
 }
 function onKeyDown(e) {
   const t = e.target;
