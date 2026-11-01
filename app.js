@@ -396,11 +396,14 @@ function minuteTick() {
 }
 
 function scheduleCountdownTick() {
+  clearTimeout(countdownTimer);
+  /* 对齐到整分钟，倒计时与系统时钟同步跳动；后台标签页不排下一次 */
   countdownTimer = setTimeout(() => {
-    if (!active) return;
+    countdownTimer = null;
+    if (!active || document.hidden) return;
     minuteTick();
     scheduleCountdownTick();
-  }, 60000);
+  }, 60000 - (Date.now() % 60000) + 50);
 }
 
 /* 面板赛程预览：只扫本地月缓存（零联网），仅在面板打开时计算，
@@ -868,9 +871,15 @@ function followSearchResult(id) {
   if (entry) toggleFollow({ name: entry.name, teamId: entry.id, leagues: entry.leagues });
 }
 function onVisibilityChange() {
-  if (document.hidden) { clearTimeout(liveTimer); liveTimer = null; }
-  else if (syncTonight()) reload();
+  if (document.hidden) {
+    clearTimeout(liveTimer); liveTimer = null;
+    clearTimeout(countdownTimer); countdownTimer = null;
+    return;
+  }
+  scheduleCountdownTick();
+  if (syncTonight()) reload();
   else if (liveTargets().length) pollLive();
+  else { invalidateFollowNext(); publish(); }
 }
 function onOnline() {
   if (syncTonight()) { reload(); return; }
@@ -879,7 +888,9 @@ function onOnline() {
 }
 function onKeyDown(e) {
   const t = e.target;
-  if (e.altKey || e.ctrlKey || e.metaKey || (t && t.matches && !t.matches('body, [data-day]'))) return;
+  if (e.altKey || e.ctrlKey || e.metaKey || e.defaultPrevented) return;
+  /* 只在可输入控件、弹窗和自带方向键的控件里让出快捷键；比赛行、普通按钮上照常可用 */
+  if (t && t.closest && t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], dialog, [role="tablist"]')) return;
   let next = null;
   if (e.key === 'ArrowLeft') next = addDays(state.dayKey, -1);
   if (e.key === 'ArrowRight') next = addDays(state.dayKey, 1);
