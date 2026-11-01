@@ -78,9 +78,9 @@ export function LeagueFilters(props: ViewProps) {
   return <div className={`filters${state.filtersOpen ? ' is-open' : ''}`}>
     <div className="filter-toolbar">
       <div className="view-seg" role="group" aria-label="视图">
-        <button type="button" className={`seg${state.view === 'day' ? ' on' : ''}`} id="viewDay" aria-label="按日查看" aria-pressed={state.view === 'day'} onClick={() => api.setView('day')}>日</button>
-        <button type="button" className={`seg${state.view === 'tonight' ? ' on' : ''}`} id="goTonight" aria-pressed={state.view === 'tonight'} aria-controls="list" onClick={() => api.setView('tonight')}>今晚</button>
-        <button type="button" className={`seg${state.view === 'week' ? ' on' : ''}`} id="viewWeek" aria-label="按周查看" title="从所选日期起查看7天" aria-pressed={state.view === 'week'} onClick={() => api.setView('week')}>7天</button>
+        <button type="button" className={`seg${state.view === 'day' ? ' on' : ''}`} id="viewDay" aria-label="按日查看" aria-controls="list" aria-pressed={state.view === 'day'} onClick={() => api.setView('day')}>日</button>
+        <button type="button" className={`seg${state.view === 'tonight' ? ' on' : ''}`} id="goTonight" title="今晚 18:00 至次日 06:00" aria-pressed={state.view === 'tonight'} aria-controls="list" onClick={() => api.setView('tonight')}>今晚</button>
+        <button type="button" className={`seg${state.view === 'week' ? ' on' : ''}`} id="viewWeek" aria-label="按周查看" title="从所选日期起查看7天" aria-pressed={state.view === 'week'} aria-controls="list" onClick={() => api.setView('week')}>7天</button>
       </div>
       <div className="toolbar-end">
         <button type="button" className="btn filter-toggle" id="filterToggle" aria-controls="chips" aria-haspopup="dialog"

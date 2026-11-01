@@ -25,7 +25,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 // The VM isolates storage, clock and requests. React views are the same components
 // used by the browser; no legacy HTML renderer is kept for the tests.
 const scriptSource = (file) => fs.readFileSync(path.join(root, file), 'utf8')
-  .replace(/^import .*?;\n/gm, '').replace(/^export \{[\s\S]*?\};?\n?/gm, '');
+  // 兼容单行、多行和纯副作用 import
+  .replace(/^import\s+(?:['"][^'"\n]+['"]|[^;'"]*?\bfrom\s*['"][^'"\n]+['"])\s*;?[ \t]*\n/gm, '').replace(/^export \{[\s\S]*?\};?\n?/gm, '');
 const dataSource = scriptSource('data.js');
 const appSource = scriptSource('app.js');
 
@@ -2164,4 +2165,53 @@ test('exporting follows merges calendars without duplicating shared matches', ()
   assert.equal((merged.match(/BEGIN:VCALENDAR/g) || []).length, 1);
   assert.equal((merged.match(/BEGIN:VEVENT/g) || []).length, 2);
   assert.match(merged, /X-WR-CALNAME:赛程 · 我的关注/);
+});
+
+test('writeCache prunes and retries once when localStorage quota is exceeded', () => {
+  const now = new Date();
+  const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const old = Array.from({ length: 130 }, (_, i) => [`fs1|m|eng.1|${1990 + Math.floor(i / 12)}${String(i % 12 + 1).padStart(2, '0')}`, JSON.stringify({ fetchedAt: i })]);
+  const h = harness(old);
+  const set = h.storage.setItem;
+  let quotaErrors = 0;
+  h.storage.setItem = (key, value) => {
+    if (h.storage.length >= 130 && h.storage.getItem(key) === null) { quotaErrors++; const e = new Error('full'); e.name = 'QuotaExceededError'; throw e; }
+    set(key, value);
+  };
+  h.context.cacheYm = ym;
+  assert.doesNotThrow(() => h.call('writeCache("esp.1", cacheYm, { fetchedAt: Date.now(), events: [] })'));
+  assert.equal(quotaErrors, 1);
+  assert.ok(h.storage.getItem(`fs1|m|esp.1|${ym}`));
+  assert.ok(h.storage.length <= 128);
+  h.storage.setItem = () => { throw new Error('always full'); };
+  assert.doesNotThrow(() => h.call('writeCache("ita.1", cacheYm, { fetchedAt: Date.now(), events: [] })'));
+});
+
+test('reconnecting tolerates view data without a failed list', () => {
+  const h = harness([], true);
+  h.call(`state.view = 'day'; state.loading = false; state.error = null;
+    state.data = { matches: [], fetchedAt: Date.now() };
+    let bareReconnects = 0; reload = () => { bareReconnects++; }`);
+  assert.doesNotThrow(() => h.call('onOnline()'));
+  assert.equal(h.call('bareReconnects'), 0);
+});
+
+test('date shortcuts work from match rows and buttons but stay out of inputs and dialogs', () => {
+  const h = harness([], true);
+  const target = (hit) => ({ matches: () => false, closest: (sel) => (hit && sel.includes(hit) ? {} : null) });
+  h.context.kt = target;
+  const start = h.call('state.dayKey');
+  h.call(`onKeyDown({ key: 'ArrowRight', target: kt(null), preventDefault() {} })`);
+  assert.equal(h.call('state.dayKey'), h.call(`addDays(${JSON.stringify(start)}, 1)`));
+  for (const hit of ['input', 'dialog', 'tablist']) {
+    h.call(`onKeyDown({ key: 'ArrowRight', target: kt(${JSON.stringify(hit)}), preventDefault() {} })`);
+    assert.equal(h.call('state.dayKey'), h.call(`addDays(${JSON.stringify(start)}, 1)`));
+  }
+});
+
+test('import stripping handles multi-line and side-effect imports', () => {
+  const strip = (src) => src.replace(/^import\s+(?:['"][^'"\n]+['"]|[^;'"]*?\bfrom\s*['"][^'"\n]+['"])\s*;?[ \t]*\n/gm, '');
+  assert.equal(strip("import {\n  a,\n  b,\n} from './x.js';\nimport './y.js';\nimport z from \"z\"\nconst k = 1;\n"), 'const k = 1;\n');
+  assert.doesNotMatch(dataSource, /^import /m);
+  assert.doesNotMatch(appSource, /^import /m);
 });

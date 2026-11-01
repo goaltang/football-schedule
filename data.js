@@ -108,12 +108,15 @@ function readCache(leagueId, ym) {
 function writeCache(leagueId, ym, data) {
   const key = cacheKey(leagueId, ym);
   cacheMemo.set(key, data);
+  let raw;
+  try { raw = JSON.stringify(data); } catch (e) { return; }
   try {
-    storage.setItem(key, JSON.stringify(data));
-    pruneCache();
+    storage.setItem(key, raw);
   } catch (e) {
-    /* 配额满或不可用：放弃缓存，不影响本次展示 */
+    /* 配额满：先淘汰旧条目腾出空间再重试一次；仍失败就放弃缓存，不影响本次展示 */
+    try { pruneCache(); storage.setItem(key, raw); } catch (e2) { return; }
   }
+  try { pruneCache(); } catch (e) { /* 存储不可用：忽略 */ }
 }
 
 function pruneCache() {
