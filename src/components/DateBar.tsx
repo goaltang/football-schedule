@@ -5,10 +5,14 @@ const dotText: Record<string, string> = { fill: '有关注球队比赛', hollow:
 export function DateBar({ state, api }: ViewProps) {
   const inWeek = state.view === 'week';
   const today = dayKeyOf(new Date(state.now));
+  const step = inWeek ? 7 : 1;
+  const prevKey = addDays(inWeek ? state.windowStart : state.dayKey, -step);
+  const nextKey = addDays(inWeek ? state.windowStart : state.dayKey, step);
+  const md = (key: string) => { const d = parseDayKey(key); return `${d.getMonth() + 1}月${d.getDate()}日`; };
   const selected = (key: string) => state.view !== 'tonight' && key === state.dayKey;
   return <div className="sticky-bar"><div className="datebar">
-    <button className="nav" id="prevDay" aria-label={inWeek ? '前一周' : '前一天'} onClick={() => api.gotoDay(addDays(inWeek ? state.windowStart : state.dayKey, inWeek ? -7 : -1))}>‹</button>
-    <div className="days" id="days">{Array.from({ length: 7 }, (_, i) => {
+    <button className="nav" id="prevDay" aria-label={inWeek ? '前一周' : '前一天'} title={`${inWeek ? '前一周' : '前一天'}：${md(prevKey)}`} onClick={() => api.gotoDay(prevKey)}>‹</button>
+    <div className="days" role="group" aria-label="选择日期" id="days">{Array.from({ length: 7 }, (_, i) => {
       const key = addDays(state.windowStart, i);
       const date = parseDayKey(key);
       const dot = api.dayDotState(key);
@@ -17,6 +21,6 @@ export function DateBar({ state, api }: ViewProps) {
         aria-label={`${key} ${relativeLabel(key)} ${description}`} aria-pressed={selected(key)} aria-current={key === today ? 'date' : undefined}
         onClick={() => api.gotoDay(key)}><span className="day-rel">{relativeLabel(key)}</span><span className="day-date">{date.getMonth() + 1}/{date.getDate()}</span><span className={`day-dot ${dot}`} /></button>;
     })}</div>
-    <button className="nav" id="nextDay" aria-label={inWeek ? '后一周' : '后一天'} onClick={() => api.gotoDay(addDays(inWeek ? state.windowStart : state.dayKey, inWeek ? 7 : 1))}>›</button>
+    <button className="nav" id="nextDay" aria-label={inWeek ? '后一周' : '后一天'} title={`${inWeek ? '后一周' : '后一天'}：${md(nextKey)}`} onClick={() => api.gotoDay(nextKey)}>›</button>
   </div></div>;
 }

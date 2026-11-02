@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FollowRecord, ViewProps } from '../types';
 import {
   calendarUrl, webcalUrl, loadCalendarIndex, resolveTeam, fetchCalendar, downloadText,
@@ -27,6 +27,9 @@ export function CalendarDialog({ state, api }: ViewProps) {
   const [team, setTeam] = useState<TeamCalendar | null>(null);
   const [copied, setCopied] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const urlInput = useRef<HTMLInputElement>(null);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(copiedTimer.current), []);
 
   useEffect(() => {
     if (!state.calendarOpen || !record) return;
@@ -85,9 +88,12 @@ export function CalendarDialog({ state, api }: ViewProps) {
         <label className="cal-field">
           <span>订阅地址</span>
           <span className="cal-copy-row">
-            <input className="cal-url" readOnly value={url} aria-label="订阅地址" onFocus={(event) => event.currentTarget.select()} />
+            <input ref={urlInput} className="cal-url" readOnly value={url} aria-label="订阅地址" onFocus={(event) => event.currentTarget.select()} />
             <button type="button" className="cal-copy" onClick={async () => {
-              setCopied(await copyText(url, document.querySelector<HTMLInputElement>('.cal-url')));
+              const ok = await copyText(url, urlInput.current);
+              setCopied(ok);
+              clearTimeout(copiedTimer.current);
+              if (ok) copiedTimer.current = setTimeout(() => setCopied(false), 2000);
             }}>{copied ? '已复制' : '复制'}</button>
           </span>
         </label>
