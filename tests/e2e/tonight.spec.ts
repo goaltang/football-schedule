@@ -78,7 +78,7 @@ test('today, date navigation and seven-day view leave tonight with their usual d
   await page.goto('./');
   const tonight = page.getByRole('button', { name: '今晚', exact: true });
   await tonight.click();
-  await page.getByRole('button', { name: '今天', exact: true }).click();
+  await page.locator('[data-day="2026-09-30"]').click();
   await expect(tonight).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('#heroDate')).toHaveText('09.30');
   await expect(page.getByRole('button', { name: '按日查看' })).toHaveAttribute('aria-pressed', 'true');
@@ -180,8 +180,9 @@ test('tonight automatically refreshes an included live score', async ({ page }) 
   await page.getByRole('button', { name: '今晚', exact: true }).click();
   const live = page.locator('#list .match').filter({ has: page.locator('[data-match="opening"]') });
   await expect(live.locator('.score')).toHaveText('1–0');
-  await expect(page.locator('#scoreUpdate')).toContainText('约每分钟自动更新');
-  await page.clock.runFor(60_000);
+  await expect(page.locator('#scoreUpdate')).toContainText('约每 30 秒自动更新');
+  // 有进行中比赛时首轮比分刷新约 1 秒后开始；不一次推进太久，否则假时钟会触发请求超时。
+  await page.clock.runFor(1_000);
   await expect(live.locator('.score')).toHaveText('2–0');
   await expect(page.getByRole('button', { name: '今晚', exact: true })).toHaveAttribute('aria-pressed', 'true');
 });

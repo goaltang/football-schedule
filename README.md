@@ -24,7 +24,7 @@ npm run preview
 验证改动：
 
 ```bash
-node --test tests/regression.test.js
+npm test
 npm run build
 npx playwright install chromium
 npm run test:e2e
@@ -66,7 +66,7 @@ npm run test:e2e
 - 成年男子国家队赛事：国际友谊赛、欧国联、世界杯、六大洲世预赛、亚洲杯及预选赛、欧洲杯及预选赛、美洲杯，共 14 项。新用户默认启用国家队赛事；已有用户保留原筛选选择，在“赛事筛选 → 国家队”开启所需赛事即可。
 - 可搜索“国足”“中国队”“阿根廷”“Argentina”等名称关注国家队。同一国家队跨赛事只显示一条搜索结果；关注后会查询全部已接入的国家队赛事，关闭赛事中的其他球队仍不显示。
 - 赛程数据齐全且当天没比赛时，海报头显示“暂无比赛”，列表显示赛程预览与更早/之后比赛的跳转；首次加载显示“加载中…”，已有比赛的后台更新显示“更新中…”；数据过期或部分联赛不可用、且暂无比赛可确认时显示“赛程待确认”，已有比赛则显示场数和“赛程可能有变动”或“部分赛程未能加载”；页面加载异常且无比赛时显示“暂时无法加载赛程”并可重新加载。
-- 比赛时间为本机时区；当前列表有进行中的比赛时，约每分钟自动刷新比分，只重取进行中比赛所属的赛事，其余赛事继续用月缓存。顶部显示比分自身的更新时间，以及更新中、可能延迟或更新失败后自动重试的提示；失败时保留上次比分，也可点“刷新”立即重试。
+- 比赛时间为本机时区；当前列表有进行中的比赛时，约每 30 秒自动刷新比分（只请求进行中比赛所在的那一天）。顶部显示比分自身的更新时间，以及更新中、可能延迟或更新失败后自动重试的提示；失败时保留上次比分，也可点“刷新”立即重试。
   多场进行中的比赛使用最早的比分更新时间，避免其他赛事的新赛程掩盖旧比分；跨日的更新时间附带日期。没有进行中的比赛时显示赛程更新时间。
 - 未开赛的比赛显示开赛倒计时（“3 分钟后 / 3 小时后 / 2 天后”，每分钟原地更新，7 天以上仍显示“未开赛”）。
 - 打开页面会按日期条上显示的日期（含跨月）预取所需的整月赛程缓存，翻到哪天基本秒出。
@@ -76,6 +76,30 @@ npm run test:e2e
   本站快照同时提供完整球队名单，搜索国家队和俱乐部无需先直连 ESPN；名单缓存有效期 7 天，抓取失败保留旧名单。
   过期缓存先展示并提示信息可能不完整，后台静默更新。弱网无缓存时首屏最多等 25 秒；
   数据仍不可用则显示“重试”，不会将未取得数据误判为休赛。
+
+## 加进日历
+
+关注面板里每支球队右侧有一个日历按钮：可以把这支球队的赛程订阅到手机或电脑日历，也可以只导出一份 .ics。
+
+- **订阅（推荐）**：iPhone / iPad / Mac 点“在日历应用里打开”，确认订阅即可；安卓和电脑复制“订阅地址”，
+  在 Google 日历网页版“其他日历 → 从网址添加”，或在 Outlook 里粘贴地址。
+  订阅后比赛改期、延期、取消会自动同步，不用再打开网站。
+- **只导出这一次**：下载 .ics 导入，之后不会自动更新；面板底部“导出全部关注”会把所有已关注球队合成一份文件。
+- 一支球队一个文件 `ics/<teamId>.ics`，地址里只有 ESPN 的公开球队编号，不包含关注列表，
+  所以订阅多支球队不会把“你喜欢谁”一次性交给日历服务商。
+- 订阅范围与赛程快照一致：未来约两个月，随快照更新向前滚动，只保留还没结束的比赛。
+  日历里的比赛会按 UID 稳定更新，不会因为重新生成而重复。
+- 默认开赛前 30 分钟提醒，可在日历里修改；已取消和延期的比赛不设提醒，标题分别加“已取消”“延期”。
+- 日历客户端自己决定刷新时间（iOS 约 1 小时到 1 天，Google 日历 8–24 小时），改期可能延迟数小时才出现；
+  这条也写在弹窗里，避免被当成故障。
+
+生成方式：`npm run build` 时由 `tools/build-ics.js` 从 `snapshot/schedule.json` 生成 `dist/ics/`（约 300 个文件、1.7 MB，
+不进仓库，3 小时一次的快照提交不会因此膨胀）。本地检查可运行 `npm run ics` 生成到 `dist/ics`，
+或 `npm run preview` 后直接访问 `/football-schedule/ics/359.ics`；开发服务器按需现算，不落盘。
+`SITE_URL` 环境变量可覆盖日历描述里的站点地址，默认 `https://goaltang.github.io/football-schedule/`。
+
+部署后请用 `curl -I https://goaltang.github.io/football-schedule/ics/359.ics` 确认 Content-Type；
+客户端更依赖文件内容和 `.ics` 后缀，但仍建议发布后验一次。
 
 ## 手机上用 / PWA
 
@@ -131,7 +155,9 @@ PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生
 | `data.js` | 数据层：ESPN 抓取、归一化、按月缓存、时区分桶、空日就近搜索 |
 | `app.js` | 状态、动作、加载顺序、轮询和偏好同步 |
 | `src/components/` | 日期栏、赛事筛选、关注管理、赛程列表及比赛行 |
-| `src/domain/` | 关注匹配、球队搜索和日期格式 |
+| `src/domain/` | 关注匹配、球队搜索、日期格式和 iCalendar 拼装（`ics.js`） |
+| `src/components/CalendarDialog.tsx` | “加进日历”弹窗与导出全部关注 |
+| `tools/build-ics.js` | 从快照生成 `dist/ics/*.ics` 与球队索引，构建和开发服务器共用 |
 | `src/types.ts` | 界面与数据接口的 TypeScript 类型 |
 | `vite.config.ts` | 构建、静态资源与 PWA 缓存清单 |
 | `manifest.webmanifest` / `icons/` | PWA 清单与应用图标（安装到手机主屏用） |
@@ -142,9 +168,9 @@ PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生
 
 ## 部署与迁移
 
-合并迁移 PR 前，在仓库 **Settings → Pages → Source** 将发布源设为 **GitHub Actions**。若已先合并，切换来源后手动运行 `deploy` 工作流即可发布。`deploy.yml` 安装依赖、运行回归测试、构建 `dist/` 并发布。
+合并迁移 PR 前，在仓库 **Settings → Pages → Source** 将发布源设为 **GitHub Actions**。若已先合并，切换来源后手动运行 `deploy` 工作流即可发布。`deploy.yml` 在推送 `main` 和每 3 小时定时运行：安装依赖、运行测试、生成最新赛程快照、构建 `dist/` 并发布。
 
-赛程快照继续每三小时更新。快照工作流提交数据后显式构建并发布，确保机器人提交不会漏掉部署。
+快照只随产物发布，不再提交回仓库。本地运行 `npm run snapshot` 产生的 `snapshot/` 改动一般不用提交。
 
 构建时复制 `logos/`、`icons/` 和 `snapshot/`。`vite.config.ts` 将真实 JS/CSS 文件清单写入产物 `sw.js`，缓存版本由 HTML 和资源清单生成。以后无需手动给脚本加 `?v=`。
 
@@ -154,7 +180,7 @@ PWA 外壳（`manifest.webmanifest` + `icons/` + `sw.js`）只在 http(s) 下生
 ## 常见改动
 
 - **加/减赛事**：`config.js` 里 `LEAGUES` 增删一行（`id` 为 ESPN 赛事标识，如 `por.1` 葡超、`fifa.friendly` 国际友谊赛）；国家队赛事加 `group: 'national'`。
-  增加后跑一次 `node tools/refresh-logos.js` 把新赛事队徽下载到本地；仅刷新国家队可运行 `node tools/refresh-logos.js --national`。再运行 `node tools/build-snapshot.js` 和 `node tools/build-teams-snapshot.js` 更新赛程和球队名单，部署后由原有定时工作流继续每 3 小时更新。
+  增加后跑一次 `node tools/refresh-logos.js` 把新赛事队徽下载到本地；仅刷新国家队可运行 `node tools/refresh-logos.js --national`。再运行 `node tools/build-snapshot.js` 和 `node tools/build-teams-snapshot.js` 更新赛程和球队名单，部署时会自动生成最新快照，此后每 3 小时更新。
 - **球队中文名**：`team-names.js` 增加一行；大小写、音调、`FC`/`AS` 前缀后缀等写法差异会自动归一，
   不用为同一支球队写多条。查漏有两个途径：访问 `/football-schedule/tools/zh-coverage.html`，一次列出所有联赛里还没收录的队名
   （附可直接粘贴的空条目）；或平时看球时留意浏览器 console 的“未收录中文名”提示。

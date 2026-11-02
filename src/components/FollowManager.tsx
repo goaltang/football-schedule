@@ -5,6 +5,7 @@ import { searchKey, searchTeams } from '../domain/catalog.js';
 import { leagueZh } from '../domain/format.js';
 import { Logo } from './Logo';
 import { PanelDialog } from './PanelDialog';
+import { ExportCalendars } from './CalendarDialog';
 
 export function SearchResults({ state, api }: ViewProps) {
   const search = state.search;
@@ -41,6 +42,12 @@ export function FollowTeams({ state, api }: ViewProps) {
         ? <button type="button" className="follow-team-next follow-preview-link" aria-label={`查看当天比赛 ${name} ${previewDay} · ${api.followNextText(next)}`}
           onClick={() => api.gotoDay(previewDay, { revealMatch: { id: next.id, league: next.league } })}>{api.followNextText(next)}</button>
         : <span className="follow-team-next">{api.followNextText(next)}</span>)}
+      <button type="button" className="follow-cal" data-cal-idx={index} aria-label={`加进日历 ${name}`} title="加进日历"
+        onClick={() => api.openCalendar(index)}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
+          <rect x="3.5" y="5" width="17" height="15.5" rx="2.5" /><path d="M3.5 9.5h17M8 3.5V6M16 3.5V6" />
+        </svg>
+      </button>
       <button type="button" className="follow-remove" data-follow-idx={index} aria-label={`取消关注 ${name}`} onClick={() => api.unfollowAt(index)}>取消关注</button>
     </div>;
   })}</> : <div className="follow-empty">暂无关注球队。搜索球队或点击比赛中的 ☆ 添加关注。</div>;
@@ -63,7 +70,7 @@ export function FollowManager(props: ViewProps) {
   return <PanelDialog id="followManager" open={state.followOpen} title="我的关注" summary={`${state.followed.length} 支球队 · 关注自动保存在本机`}
     variant="drawer" returnFocusId="followToggle" desktopFocusId="followSearch" restoreFocus={!state.previewReveal}
     onClose={api.toggleFollowPanel} footer={<div className="filter-panel-foot">
-      <p>在比赛中点 ☆，也可以添加关注</p>
+      <div className="foot-copy"><p>在比赛中点 ☆，也可以添加关注</p><ExportCalendars {...props} /></div>
       <button type="button" className="filter-done" onClick={api.toggleFollowPanel}>完成</button>
     </div>}>
     <div className="follow-manager"><div className="follow-search">

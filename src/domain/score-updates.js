@@ -25,7 +25,7 @@ function scoreUpdateInfo(data, { error = false, loading = false, pending = data?
   if (error || failedCount) return { phase: 'failed', fetchedAt,
     text: `${!error && failedCount < live.length ? '部分' : ''}比分更新失败 · 稍后自动重试` };
   if (!fetchedAt || now - fetchedAt >= SCORE_DELAY_MS) return { phase: 'delayed', fetchedAt, text: '比分可能已延迟 · 将自动尝试更新' };
-  return { phase: 'auto', fetchedAt, text: '进行中比分约每分钟自动更新 · 可能有延迟' };
+  return { phase: 'auto', fetchedAt, text: '进行中比分约每 30 秒自动更新 · 可能有延迟' };
 }
 
 export { scoreUpdateInfo, updateTimeLabel };

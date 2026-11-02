@@ -108,12 +108,15 @@ function readCache(leagueId, ym) {
 function writeCache(leagueId, ym, data) {
   const key = cacheKey(leagueId, ym);
   cacheMemo.set(key, data);
+  let raw;
+  try { raw = JSON.stringify(data); } catch (e) { return; }
   try {
-    storage.setItem(key, JSON.stringify(data));
-    pruneCache();
+    storage.setItem(key, raw);
   } catch (e) {
-    /* 配额满或不可用：放弃缓存，不影响本次展示 */
+    /* 配额满：先淘汰旧条目腾出空间再重试一次；仍失败就放弃缓存，不影响本次展示 */
+    try { pruneCache(); storage.setItem(key, raw); } catch (e2) { return; }
   }
+  try { pruneCache(); } catch (e) { /* 存储不可用：忽略 */ }
 }
 
 function pruneCache() {
@@ -266,6 +269,64 @@ function fetchMonth(leagueId, ym) {
   return p;
 }
 
+/* ---------- 直播比分：按「联赛×美东日」刷新 ----------
+ * 整月接口每个联赛几十 KB，直播时每轮只需要几场比赛。日接口结果按比赛 ID 覆盖进月缓存，
+ * 事件带自己的 fetchedAt；patchedAt 防止较旧的同源快照把新比分盖回去。
+ * 月缓存缺失或目标比赛不在日接口结果里（改期等）时，回落该月整月强制抓取。 */
+function fetchDay(leagueId, bucket) {
+  const key = `day|${leagueId}|${bucket}`;
+  if (inflight.has(key)) return inflight.get(key);
+  const p = fetchJson(`${ESPN_BASE}/${leagueId}/scoreboard?dates=${bucket}`)
+    .then((json) => {
+      noteNetResult(true);
+      return normalizeMonthData(json, leagueId);
+    })
+    .catch((err) => {
+      noteNetResult(false);
+      throw err;
+    })
+    .finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
+/* 返回本轮没能刷新的比赛 ID */
+async function refreshMatches(targets) {
+  const groups = new Map();
+  for (const m of targets) {
+    const t = new Date(m.start);
+    if (!m.league || !Number.isFinite(t.getTime())) continue;
+    const key = `${m.league}|${etBucketOf(t)}`;
+    if (!groups.has(key)) groups.set(key, new Set());
+    groups.get(key).add(m.id);
+  }
+  const failed = new Set();
+  await mapLimit([...groups], 4, async ([key, ids]) => {
+    const [leagueId, bucket] = key.split('|');
+    const ym = bucket.slice(0, 6);
+    let day;
+    try {
+      day = await fetchDay(leagueId, bucket);
+    } catch (e) {
+      for (const id of ids) failed.add(id);
+      return;
+    }
+    const byId = new Map(day.events.map((ev) => [ev.id, { ...ev, fetchedAt: day.fetchedAt }]));
+    const cached = readCache(leagueId, ym);
+    const missing = [...ids].filter((id) => !byId.has(id));
+    if (cached) {
+      const known = new Set(cached.events.map((ev) => ev.id));
+      const events = cached.events.map((ev) => byId.get(ev.id) || ev);
+      for (const ev of byId.values()) if (!known.has(ev.id)) events.push(ev);
+      writeCache(leagueId, ym, { ...cached, events, patchedAt: day.fetchedAt });
+    }
+    if (cached && !missing.length) return;
+    const r = await ensureMonth(leagueId, ym, { force: true });
+    if (r.refreshFailed) for (const id of cached ? missing : ids) failed.add(id);
+  });
+  return failed;
+}
+
 /* ---------- 同源快照（冷启动兜底） ----------
  * snapshot/schedule.json 由 GitHub Actions 定时生成（tools/build-snapshot.js），格式与月缓存一致。
  * 新设备没有任何缓存、浏览器直连 ESPN 又慢或不通时，先用它出数据；写入缓存后照常按 TTL 判过期并联网更新。
@@ -299,7 +360,7 @@ function seedFromSnapshot(opts = {}) {
           || !Number.isFinite(raw.fetchedAt) || raw.fetchedAt <= 0) continue;
         const entry = { ...raw, source: 'snapshot' };
         const local = readCache(leagueId, ym);
-        if (local && (local.fetchedAt > entry.fetchedAt
+        if (local && (Math.max(local.fetchedAt, local.patchedAt || 0) > entry.fetchedAt
           || (local.fetchedAt === entry.fetchedAt && local.source === 'snapshot'))) continue;
         /* 批量写入，最后统一淘汰一次（逐条 pruneCache 会反复解析全部缓存） */
         cacheMemo.set(cacheKey(leagueId, ym), entry);
@@ -321,24 +382,15 @@ function seedFromSnapshot(opts = {}) {
 
 /* 取某联赛某月的数据：缓存新鲜则直接用，否则抓取（失败回落旧缓存）
  * opts.force：无视缓存新鲜度强制抓取（刷新按钮 / 直播轮询）
- * opts.forceLeagues：定向刷新的联赛集合；不在集合里的联赛只读缓存，
- *   不因“本次没有重验”而把整个页面标成过期（直播轮询只重取有直播的赛事）
  * opts.cacheOnly：只读缓存不发网络（stale-while-revalidate 的第一步）
  */
 async function ensureMonth(leagueId, ym, opts = {}) {
   const cached = readCache(leagueId, ym);
-  const scoped = opts.forceLeagues
-    ? (opts.forceLeagues instanceof Set ? opts.forceLeagues : new Set(opts.forceLeagues))
-    : null;
-  const targeted = scoped ? scoped.has(leagueId) : null;
-  const force = !!opts.force && targeted !== false;
-  /* 定向刷新时，未点名的联赛按缓存出图；没有缓存才照常补取一次 */
-  if (targeted === false && cached) return { data: cached, fromCache: true, stale: false };
   const fresh = !!cached && Date.now() - cached.fetchedAt < monthTtlMs(ym, cached);
-  if (fresh && !force) return { data: cached, fromCache: true, stale: false };
+  if (fresh && !opts.force) return { data: cached, fromCache: true, stale: false };
   /* 冷却期或只读模式：不发网络（force 可穿透冷却） */
-  if (opts.cacheOnly || (networkCoolingDown() && !force)) {
-    return { data: cached, fromCache: !!cached, stale: targeted !== false, missing: !cached };
+  if (opts.cacheOnly || (networkCoolingDown() && !opts.force)) {
+    return { data: cached, fromCache: !!cached, stale: true, missing: !cached };
   }
   try {
     return await fetchMonth(leagueId, ym);
@@ -537,7 +589,7 @@ async function collectView(dayKey, jobs, policy) {
       if (dayKeyOf(new Date(m.start)) === dayKey) {
         // Keep each score's own retrieval time and failed-refresh result. A fresh
         // schedule snapshot is not evidence that the live score just refreshed.
-        matches.set(m.id, { ...m, fetchedAt: r.data.fetchedAt, refreshFailed: !!r.refreshFailed });
+        matches.set(m.id, { ...m, fetchedAt: m.fetchedAt || r.data.fetchedAt, refreshFailed: !!r.refreshFailed });
         added = true;
       }
     }
@@ -548,26 +600,39 @@ async function collectView(dayKey, jobs, policy) {
   return snapshot();
 }
 
+/* opts.live：直播轮询的目标比赛。月缓存都还新鲜时只按比赛刷新比分，不重拉整月、不重下快照；
+   当天没有目标比赛则直接返回缓存。缓存过期或缺失时退回整月强制抓取。 */
 async function loadDay(dayKey, opts = {}) {
   const leagues = opts.leagues || DEFAULT_ENABLED;
-  /* 定向刷新：只有这些联赛强制联网，其余联赛直接用缓存（直播轮询 / 开球重验） */
-  const forceLeagues = opts.refreshLeagues ? new Set(opts.refreshLeagues) : null;
   const jobs = [];
   for (const leagueId of leagues) {
     for (const ym of monthsForDay(dayKey)) jobs.push({ leagueId, ym });
   }
 
-  const instant = await collectView(dayKey, jobs, { cacheOnly: true });
-  const needsNetwork = opts.force || instant.stale || !instant.fetchedAt;
+  if (opts.live) {
+    const cached = await collectView(dayKey, jobs, { cacheOnly: true });
+    if (cached.fetchedAt && !cached.stale) {
+      const targets = opts.live.filter((m) => dayKeyOf(new Date(m.start)) === dayKey);
+      if (!targets.length) return cached;
+      const failed = await refreshMatches(targets);
+      const fresh = await collectView(dayKey, jobs, { cacheOnly: true });
+      return { ...fresh, matches: fresh.matches.map((m) => (failed.has(m.id) ? { ...m, refreshFailed: true } : m)) };
+    }
+  }
+  const force = opts.force || !!opts.live;
+
+  const instant = await collectView(dayKey, jobs, { cacheOnly: true, force });
+  const needsNetwork = force || instant.stale || !instant.fetchedAt;
   if (!needsNetwork) return instant;
 
   const refresh = async (onProgress) => {
-    // 冷启动才用同源快照补种；已有快照时不再重下一份（每次 38KB）。
-    await seedFromSnapshot();
+    // 先走与页面同源的快照。微信内置浏览器无需先连接 ESPN 即可取得完整赛程。
+    // 直播轮询不重下快照：它每 3 小时才更新，比分只会比直连旧。
+    await seedFromSnapshot({ force: opts.force && !opts.live });
     if (onProgress) onProgress();
-    return collectView(dayKey, jobs, { force: opts.force, forceLeagues, onProgress });
+    return collectView(dayKey, jobs, { force, onProgress });
   };
-  if (instant.fetchedAt && !opts.force) {
+  if (instant.fetchedAt && !force) {
     refresh()
       .then((fresh) => { if (opts.onUpdate) opts.onUpdate(fresh); })
       .catch(() => { /* 后台刷新失败：保留缓存视图 */ });
@@ -669,4 +734,4 @@ async function findNearbyMatchdays(dayKey, opts = {}) {
   return result;
 }
 
-export { dayKeyOf, parseDayKey, addDays, etBucketOf, bucketsForDay, monthsForDay, cacheKey, readCache, writeCache, pruneCache, monthDistance, monthTtlMs, fetchOnce, fetchJson, normalizeEvent, normalizeLeagueMeta, normalizeMonthData, noteNetResult, networkCoolingDown, fetchMonth, seedFromSnapshot, ensureMonth, seedTeamsFromSnapshot, normalizeTeamEntry, normalizeTeams, readTeamsCache, writeTeamsCache, fetchTeams, ensureTeams, mapLimit, mergeByLocalDay, collectView, loadDay, cachedDayMatches, findNearbyMatchdays, ESPN_BASE, ET_ZONE, FETCH_TIMEOUT_MS, STATUS_BY_NAME, CACHE_PREFIX, CACHE_MAX_ENTRIES, SNAPSHOT_URL, SNAPSHOT_TIMEOUT_MS, TEAMS_PREFIX, TEAMS_TTL_MS, storage, cacheMemo, teamsMemo };
+export { dayKeyOf, parseDayKey, addDays, etBucketOf, bucketsForDay, monthsForDay, cacheKey, readCache, writeCache, pruneCache, monthDistance, monthTtlMs, fetchOnce, fetchJson, normalizeEvent, normalizeLeagueMeta, normalizeMonthData, noteNetResult, networkCoolingDown, fetchMonth, fetchDay, refreshMatches, seedFromSnapshot, ensureMonth, seedTeamsFromSnapshot, normalizeTeamEntry, normalizeTeams, readTeamsCache, writeTeamsCache, fetchTeams, ensureTeams, mapLimit, mergeByLocalDay, collectView, loadDay, cachedDayMatches, findNearbyMatchdays, ESPN_BASE, ET_ZONE, FETCH_TIMEOUT_MS, STATUS_BY_NAME, CACHE_PREFIX, CACHE_MAX_ENTRIES, SNAPSHOT_URL, SNAPSHOT_TIMEOUT_MS, TEAMS_PREFIX, TEAMS_TTL_MS, storage, cacheMemo, teamsMemo };

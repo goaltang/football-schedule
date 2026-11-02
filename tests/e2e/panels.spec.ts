@@ -59,7 +59,7 @@ test('keyboard focus stays in the dialog and Escape returns to its opener', asyn
   await page.keyboard.press('t');
   await page.keyboard.press('ArrowRight');
   await expect(page.locator('#heroDate')).toHaveText('09.30');
-  await page.locator('#goToday').evaluate((button: HTMLButtonElement) => button.focus());
+  await page.locator('#viewDay').evaluate((button: HTMLButtonElement) => button.focus());
   expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();

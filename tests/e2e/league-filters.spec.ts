@@ -17,7 +17,7 @@ test('quick choices show the selected combination and persist after closing and 
   const national = LEAGUES.filter((league) => league.group === 'national').map((league) => league.id);
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('fs1.enabled')!))).toEqual(national);
   await expect(page.getByRole('tab', { name: /国家队/ })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.locator('#filterCount')).toHaveText(`已选 ${national.length}`);
+  await expect(page.locator('#filterCount')).toHaveText(String(national.length));
   await page.getByRole('button', { name: '只看五大联赛', exact: true }).click();
   await expect(page.getByRole('tab', { name: /俱乐部/ })).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('.filter-summary')).toHaveText('五大联赛');

@@ -2,8 +2,9 @@ import type { ViewProps } from '../types';
 
 export function ScheduleScope({ state, api }: ViewProps) {
   return <button type="button" className={`btn scope-toggle${state.onlyFollowed ? ' on' : ''}`} id="onlyFollowed"
-    aria-pressed={state.onlyFollowed} aria-controls="list" onClick={() => api.setOnlyFollowed(!state.onlyFollowed)}>
-    <span aria-hidden="true">★</span> 只看关注
+    aria-pressed={state.onlyFollowed} aria-controls="list" aria-label="只看关注" title="只看关注球队的比赛"
+    onClick={() => api.setOnlyFollowed(!state.onlyFollowed)}>
+    <span aria-hidden="true">★</span><span className="scope-text"> 只看关注</span>
   </button>;
 }
 

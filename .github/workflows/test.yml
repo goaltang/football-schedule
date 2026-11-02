@@ -1,9 +1,7 @@
-# 每次推送/PR 跑回归测试，避免有问题的提交直接上线。
+# PR 上跑完整测试；推送 main 时由 deploy 工作流测试后再发布。
 name: test
 
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:

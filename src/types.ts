@@ -48,6 +48,8 @@ export interface Snapshot {
   error: string | null;
   followOpen: boolean;
   filtersOpen: boolean;
+  calendarOpen: boolean;
+  calendarIndex: number | null;
   search: { query: string; catalog: CatalogEntry[]; loading: boolean; loaded: boolean; failed: number };
   followNext: (Match | null)[] | null;
   now: number;
@@ -65,6 +67,8 @@ export interface AppApi {
   setLeagues: (ids: string[]) => void;
   toggleFilters: () => void;
   toggleFollowPanel: () => void;
+  openCalendar: (index: number) => void;
+  closeCalendar: () => void;
   toggleFollow: (team: Team & { league?: string; leagues?: string[] }) => void;
   unfollowAt: (index: number) => void;
   setSearchQuery: (query: string) => void;

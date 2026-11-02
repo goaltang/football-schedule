@@ -10,7 +10,7 @@ import { tonightDayKey, tonightRange, summarizeTonight } from './src/domain/toni
 /* 页面控制器：偏好、加载、订阅、轮询。DOM 由 React 组件管理。 */
 'use strict';
 
-const LIVE_POLL_MS = 60e3;
+const LIVE_POLL_MS = 30e3;
 const STRIP_LEN = 7;
 const LS_ENABLED = 'fs1.enabled';
 const LS_DAY = 'fs1.day';
@@ -47,6 +47,8 @@ const state = {
   error: null,
   followOpen: false,
   filtersOpen: false,
+  calendarOpen: false,
+  calendarIndex: null,
 };
 
 let liveTimer = null;
@@ -360,39 +362,30 @@ function dayDotState(dayKey) {
 }
 
 /* 每分钟发布时钟更新，React 保留比赛行和焦点；仅在开赛或直播时刷新数据。 */
-/* 已过开赛时间却仍是“未开赛”的比赛（页面在赛前打开并放置）：需要强制刷新才能进入直播。
-   只看开赛后 3 小时内，延期/未更新的比赛不会永远轮询。 */
+/* 已过开赛时间却仍是“未开赛”的比赛需要刷新才能进入直播：开赛后 3 小时内持续轮询；
+   超过 3 小时但数据是开赛前抓的（如旧快照），也刷新一次。刷新后数据晚于开赛，延期比赛不会永远轮询。 */
 const KICKOFF_GRACE_MS = 3 * 3600e3;
 
-/* 直播轮询和开球重验只重取有需要的赛事：整页刷新会把 20 多个赛事的整月数据
-   每分钟重下一遍（月租数据约 300KB/分钟），对手机流量和接口都不友好。 */
-function leaguesOf(matches, predicate) {
-  const leagues = new Set();
-  for (const m of matches) if (m && m.league && predicate(m)) leagues.add(m.league);
-  return [...leagues];
+function awaitingKickoff(m, now = Date.now()) {
+  if (!m || m.status !== 'SCHEDULED') return false;
+  const t = new Date(m.start).getTime();
+  return Number.isFinite(t) && t <= now && (now - t < KICKOFF_GRACE_MS || !(m.fetchedAt > t));
 }
 
-function livePollLeagues() {
-  return leaguesOf(currentMatches(), (m) => m.live);
-}
-
-function kickoffLeagues() {
+/* 直播轮询的目标：进行中，或已过开赛时间仍显示未开赛 */
+function liveTargets() {
   const now = Date.now();
-  return leaguesOf(currentMatches(), (m) => {
-    if (m.status !== 'SCHEDULED') return false;
-    const t = new Date(m.start).getTime();
-    return Number.isFinite(t) && t <= now && now - t < KICKOFF_GRACE_MS;
-  });
+  return currentMatches().filter((m) => m && (m.live || awaitingKickoff(m, now)));
 }
 
 function kickoffPassed() {
-  return kickoffLeagues().length > 0;
+  const now = Date.now();
+  return currentMatches().some((m) => awaitingKickoff(m, now));
 }
 
 function refreshIfKickoffPassed() {
-  if (document.hidden || state.loading) return;
-  const leagues = kickoffLeagues();
-  if (leagues.length) reload({ force: true, refreshLeagues: leagues });
+  if (document.hidden || state.loading || liveTimer || !kickoffPassed()) return;
+  pollLive();
 }
 
 function minuteTick() {
@@ -403,11 +396,14 @@ function minuteTick() {
 }
 
 function scheduleCountdownTick() {
+  clearTimeout(countdownTimer);
+  /* 对齐到整分钟，倒计时与系统时钟同步跳动；后台标签页不排下一次 */
   countdownTimer = setTimeout(() => {
-    if (!active) return;
+    countdownTimer = null;
+    if (!active || document.hidden) return;
     minuteTick();
     scheduleCountdownTick();
-  }, 60000);
+  }, 60000 - (Date.now() % 60000) + 50);
 }
 
 /* 面板赛程预览：只扫本地月缓存（零联网），仅在面板打开时计算，
@@ -472,8 +468,27 @@ function toggleFollowPanel() {
   if (state.followOpen) {
     state.filtersOpen = false;
     state.previewReveal = null;
+  } else {
+    /* 面板收起时套在上面的日历弹窗一起关闭，不留孤立的模态 */
+    state.calendarOpen = false;
+    state.calendarIndex = null;
   }
   invalidateFollowNext();
+  publish();
+}
+
+/* 关注面板里的某一支球队 -> “加进日历”弹窗；只记索引，订阅地址由组件按需取 */
+function openCalendar(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= state.followed.length) return;
+  state.calendarIndex = index;
+  state.calendarOpen = true;
+  publish();
+}
+
+function closeCalendar() {
+  if (!state.calendarOpen && state.calendarIndex == null) return;
+  state.calendarOpen = false;
+  state.calendarIndex = null;
   publish();
 }
 
@@ -537,7 +552,7 @@ async function reload(opts = {}) {
   try {
     const data = await loadDayVisible(state.dayKey, {
       force: opts.force,
-      refreshLeagues: opts.refreshLeagues,
+      live: opts.live,
       onUpdate: (fresh) => {
         /* 后台重验完成：静默替换为新数据 */
         if (seq !== loadSeq || state.dayKey !== fresh.dayKey) return;
@@ -592,7 +607,7 @@ async function reloadRange(view, opts = {}) {
       try {
         const d = await loadDayVisible(key, {
           force: opts.force,
-          refreshLeagues: opts.refreshLeagues,
+          live: opts.live,
           onUpdate: (fresh) => {
             /* 后台重验完成：把该天替换为新数据 */
             if (seq !== loadSeq || state.view !== view) return;
@@ -644,15 +659,22 @@ function currentMatches() {
     : displayedDay(state.data)?.matches || [];
 }
 
+/* 固定节奏：间隔从上一轮开始计时，请求耗时不再叠加到下一轮 */
+let lastLivePoll = 0;
+
+function pollLive() {
+  clearTimeout(liveTimer);
+  liveTimer = null;
+  lastLivePoll = Date.now();
+  return reload({ force: true, live: liveTargets() });
+}
+
 function scheduleLivePoll() {
   clearTimeout(liveTimer);
-  if (!active || document.hidden) return;
-  if (!livePollLeagues().length) return;
-  liveTimer = setTimeout(() => {
-    /* 触发时重新算一遍：期间可能已有比赛完场或被筛掉 */
-    const leagues = livePollLeagues();
-    if (leagues.length) reload({ force: true, refreshLeagues: leagues });
-  }, LIVE_POLL_MS);
+  liveTimer = null;
+  if (!active || document.hidden || !liveTargets().length) return;
+  const wait = Math.max(1000, LIVE_POLL_MS - (Date.now() - lastLivePoll));
+  liveTimer = setTimeout(pollLive, wait);
 }
 
 /* 预取日期条：把窗口 7 天涉及的「联赛×月份」全部暖机（数据层按月缓存，天然去重）。
@@ -785,6 +807,11 @@ let snapshot;
 let active = false;
 let countdownTimer = null;
 function publish() {
+  /* 关注列表被其他标签页改短时，别让弹窗指着不存在的球队 */
+  if (state.calendarIndex != null && !state.followed[state.calendarIndex]) {
+    state.calendarOpen = false;
+    state.calendarIndex = null;
+  }
   let preview = state.preview;
   if (state.onlyFollowed && preview) {
     preview = displayedDay(preview);
@@ -844,18 +871,26 @@ function followSearchResult(id) {
   if (entry) toggleFollow({ name: entry.name, teamId: entry.id, leagues: entry.leagues });
 }
 function onVisibilityChange() {
-  if (document.hidden) clearTimeout(liveTimer);
-  else if (syncTonight()) reload();
-  else if (currentMatches().some((m) => m.live) || kickoffPassed()) reload({ force: true });
+  if (document.hidden) {
+    clearTimeout(liveTimer); liveTimer = null;
+    clearTimeout(countdownTimer); countdownTimer = null;
+    return;
+  }
+  scheduleCountdownTick();
+  if (syncTonight()) reload();
+  else if (liveTargets().length) pollLive();
+  else { invalidateFollowNext(); publish(); }
 }
 function onOnline() {
   if (syncTonight()) { reload(); return; }
   const d = state.view === 'tonight' ? summarizeTonight(state.tonightDays, state.dayKey) : state.data;
-  if (!state.loading && (state.error || !d || !d.fetchedAt || d.pending || d.failed.length)) reload({ force: true });
+  if (!state.loading && (state.error || !d || !d.fetchedAt || d.pending || (d.failed && d.failed.length))) reload({ force: true });
 }
 function onKeyDown(e) {
   const t = e.target;
-  if (e.altKey || e.ctrlKey || e.metaKey || (t && t.matches && !t.matches('body, [data-day]'))) return;
+  if (e.altKey || e.ctrlKey || e.metaKey || e.defaultPrevented) return;
+  /* 只在可输入控件、弹窗和自带方向键的控件里让出快捷键；比赛行、普通按钮上照常可用 */
+  if (t && t.closest && t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], dialog, [role="tablist"]')) return;
   let next = null;
   if (e.key === 'ArrowLeft') next = addDays(state.dayKey, -1);
   if (e.key === 'ArrowRight') next = addDays(state.dayKey, 1);
@@ -893,6 +928,6 @@ function stop() {
 loadPrefs();
 publish();
 export { subscribe, getSnapshot, start, stop, gotoDay, setView, setOnlyFollowed, reload, toggleLeague, setLeagues, toggleFilters,
-  toggleFollow, unfollowAt, toggleFollowPanel, setSearchQuery, loadCatalog, followSearchResult,
+  toggleFollow, unfollowAt, toggleFollowPanel, openCalendar, closeCalendar, setSearchQuery, loadCatalog, followSearchResult,
   isFollowed, matchHasFollowed, dayDotState, followDisplayName, followMetaText, followNextText,
   scheduleStatus, scheduleNotice, UI_TEXT, STATUS_LABEL, DAY_DOT_TEXT, STRIP_LEN };

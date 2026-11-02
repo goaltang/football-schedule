@@ -12,6 +12,8 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { tsImport } from 'tsx/esm/api';
 import { tonightDayKey, tonightRange, summarizeTonight } from '../src/domain/tonight.js';
+import { calendarBlock, eventBlock, mergeCalendars } from '../src/domain/ics.js';
+import { buildCalendars } from '../tools/build-ics.js';
 const { Hero } = await tsImport('../src/components/Hero.tsx', import.meta.url);
 const { DateBar } = await tsImport('../src/components/DateBar.tsx', import.meta.url);
 const { LeagueChips, LeagueFilters } = await tsImport('../src/components/LeagueFilters.tsx', import.meta.url);
@@ -23,7 +25,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 // The VM isolates storage, clock and requests. React views are the same components
 // used by the browser; no legacy HTML renderer is kept for the tests.
 const scriptSource = (file) => fs.readFileSync(path.join(root, file), 'utf8')
-  .replace(/^import .*?;\n/gm, '').replace(/^export \{[\s\S]*?\};?\n?/gm, '');
+  // 兼容单行、多行和纯副作用 import
+  .replace(/^import\s+(?:['"][^'"\n]+['"]|[^;'"]*?\bfrom\s*['"][^'"\n]+['"])\s*;?[ \t]*\n/gm, '').replace(/^export \{[\s\S]*?\};?\n?/gm, '');
 const dataSource = scriptSource('data.js');
 const appSource = scriptSource('app.js');
 
@@ -84,7 +87,7 @@ test('tonight loads both dates and keeps a completed early update before the ini
   assert.match(h.elements['#list'].innerHTML, /09\.30.*晚间/);
   assert.match(h.elements['#list'].innerHTML, /10\.01.*次日凌晨/);
   assert.equal(h.call('currentMatches().length'), 2);
-  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  assert.match(h.hero(), /进行中比分约每 30 秒自动更新/);
   h.call(`nightUpdates.get('2026-10-01')({ dayKey: '2026-10-01', matches: [], failed: ['eng.1'], fetchedAt: Date.now() })`);
   assert.equal(h.call('getSnapshot().data.matches.length'), 1);
   assert.match(h.elements['#list'].innerHTML, /英超赛程未能加载/);
@@ -160,7 +163,7 @@ test('loading an unrelated night date does not claim that a fresh live score is 
   h.call(`state.view = 'tonight'; state.dayKey = '2026-09-30'; state.loading = false;
     state.tonightDays = [{ dayKey: '2026-09-30', matches: [fixture], failed: [], fetchedAt: Date.now() },
       { dayKey: '2026-10-01', matches: [outside], pending: true, failed: [] }]; publish()`);
-  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  assert.match(h.hero(), /进行中比分约每 30 秒自动更新/);
   assert.doesNotMatch(h.hero(), /正在更新比分/);
   h.call('state.tonightDays[0].pending = true; publish()');
   assert.match(h.hero(), /正在更新比分/);
@@ -173,7 +176,7 @@ test('national competition filters preserve saved club choices', () => {
   assert.match(h.elements['#chips'].innerHTML, /aria-label="俱乐部赛事"/);
   assert.match(h.elements['#chips'].innerHTML, /aria-label="国家队赛事"/);
   assert.match(h.elements['#chips'].innerHTML, /data-league="fifa.friendly" aria-pressed="false"/);
-  assert.equal(h.elements['#filterCount'].textContent, '已选 2');
+  assert.equal(h.elements['#filterCount'].textContent, '2');
   h.call('state.enabled.add("fifa.friendly"); saveEnabled(); publish()');
   assert.match(h.elements['#chips'].innerHTML, /data-league="fifa.friendly" aria-pressed="true"/);
   assert.deepEqual(JSON.parse(h.storage.getItem('fs1.enabled')), ['eng.1', 'esp.1', 'fifa.friendly']);
@@ -511,13 +514,13 @@ function harness(entries = [], withApp = false) {
       elements['#followResults'].innerHTML = markup(SearchResults);
       const filters = markup(LeagueFilters);
       elements['.filters'].innerHTML = filters;
-      elements['#refresh'].setAttribute('aria-busy', /id="refresh" aria-busy="([^"]*)"/.exec(filters)[1]);
       elements['#filterCount'].textContent = /id="filterCount">([^<]*)/.exec(filters)[1];
       elements['#followCount'].textContent = state.followed.length ? String(state.followed.length) : '';
       elements['#followToggle'].setAttribute('aria-expanded', String(state.followOpen));
       if (state.followOpen) elements['#followManager'].removeAttribute('hidden');
       else elements['#followManager'].setAttribute('hidden', '');
       const hero = markup(Hero);
+      elements['#refresh'].setAttribute('aria-busy', /id="refresh" aria-busy="([^"]*)"/.exec(hero)[1]);
       for (const id of ['heroDate', 'heroWd', 'heroRel', 'heroCount', 'updated']) elements[`#${id}`].textContent = new RegExp(`id="${id}">([^<]*)`).exec(hero)[1];
     };
     context.__paint = paint;
@@ -613,6 +616,104 @@ test('failed live refresh preserves score age even when the fallback snapshot is
   assert.equal(recovered.matches[0].home.score, 2);
 });
 
+function liveScoreboard(events) {
+  return { events: events.map(([id, start, state, home, away]) => ({
+    id, date: start, status: { type: { state }, displayClock: "35'" },
+    competitions: [{ competitors: [
+      { homeAway: 'home', team: { id: '359', displayName: 'Arsenal' }, score: String(home) },
+      { homeAway: 'away', team: { id: '99', displayName: 'Away' }, score: String(away) },
+    ] }],
+  })) };
+}
+
+function liveDayHarness(fetchedAt = Date.now() - 60e3) {
+  const h = harness();
+  const day = h.call('dayKeyOf(new Date())');
+  const start = new Date(Date.now() - 30 * 60e3).toISOString();
+  const live = { ...match('live-score', 'eng.1', 1), start, status: 'LIVE', live: true, home: { name: 'Arsenal', teamId: '359', score: 0 } };
+  const other = { ...match('other-game', 'eng.1', 1), start };
+  const ym = h.call(`etBucketOf(new Date('${start}')).slice(0, 6)`);
+  for (const month of h.call(`monthsForDay('${day}')`)) {
+    h.storage.setItem(`fs1|m|eng.1|${month}`, JSON.stringify({ fetchedAt, league: { id: 'eng.1', logo: '' },
+      events: month === ym ? [live, other] : [] }));
+  }
+  return { h, day, live, ym, fetchedAt };
+}
+
+test('live polling refreshes only the live match day without the month feed or snapshot', async () => {
+  const { h, day, live, fetchedAt } = liveDayHarness();
+  const urls = [];
+  h.setFetch((url) => {
+    urls.push(String(url));
+    return { ok: true, json: async () => liveScoreboard([[live.id, live.start, 'in', 2, 1]]) };
+  });
+  const result = await h.call(`loadDay('${day}', { leagues: ['eng.1'], force: true, live: [${JSON.stringify(live)}] })`);
+  const bucket = h.call(`etBucketOf(new Date('${live.start}'))`);
+  assert.deepEqual(urls.map((url) => url.replace(/^.*soccer\//, '')), [`eng.1/scoreboard?dates=${bucket}`]);
+  const scored = result.matches.find((m) => m.id === live.id);
+  assert.equal(scored.home.score, 2);
+  assert.ok(scored.fetchedAt > fetchedAt);
+  assert.equal(scored.refreshFailed, false);
+  assert.equal(result.matches.find((m) => m.id === 'other-game').fetchedAt, fetchedAt);
+});
+
+test('a failed live refresh keeps the last score and marks only the targeted match', async () => {
+  const { h, day, live } = liveDayHarness();
+  const urls = [];
+  h.setFetch((url) => { urls.push(String(url)); throw new Error('offline'); });
+  const result = await h.call(`loadDay('${day}', { leagues: ['eng.1'], force: true, live: [${JSON.stringify(live)}] })`);
+  assert.ok(urls.every((url) => /dates=\d{8}$/.test(url)));
+  assert.equal(result.matches.find((m) => m.id === live.id).refreshFailed, true);
+  assert.equal(result.matches.find((m) => m.id === live.id).home.score, 0);
+  assert.equal(result.matches.find((m) => m.id === 'other-game').refreshFailed, false);
+});
+
+test('a live match missing from the day feed falls back to the month feed once', async () => {
+  const { h, day, live, ym } = liveDayHarness();
+  const urls = [];
+  h.setFetch((url) => {
+    urls.push(String(url));
+    return { ok: true, json: async () => liveScoreboard(String(url).includes(`dates=${ym}&`) ? [[live.id, live.start, 'post', 3, 1]] : []) };
+  });
+  const result = await h.call(`loadDay('${day}', { leagues: ['eng.1'], force: true, live: [${JSON.stringify(live)}] })`);
+  assert.equal(urls.length, 2);
+  assert.match(urls[1], new RegExp(`dates=${ym}&limit=1000`));
+  assert.equal(result.matches.find((m) => m.id === live.id).status, 'FT');
+});
+
+test('an older schedule snapshot does not overwrite a fresher live score', async () => {
+  const { h, day, live, ym } = liveDayHarness();
+  h.setFetch(() => ({ ok: true, json: async () => liveScoreboard([[live.id, live.start, 'in', 2, 1]]) }));
+  await h.call(`loadDay('${day}', { leagues: ['eng.1'], force: true, live: [${JSON.stringify(live)}] })`);
+  const snapshotEvents = [{ ...live, home: { ...live.home, score: 1 } }];
+  h.setFetch(() => ({ ok: true, json: async () => ({ months: { [`eng.1|${ym}`]: {
+    fetchedAt: Date.now() - 1000, league: { id: 'eng.1', logo: '' }, events: snapshotEvents } } }) }));
+  await h.call('seedFromSnapshot({ force: true })');
+  assert.equal(h.call(`readCache('eng.1', '${ym}').events.find((m) => m.id === '${live.id}').home.score`), 2);
+});
+
+test('scheduled matches past kickoff are polled until refreshed data postdates kickoff', () => {
+  const h = harness([], true);
+  const start = Date.now() - 5 * 3600e3;
+  h.context.fixture = { ...match('late', 'eng.1', 1), start: new Date(start).toISOString(), fetchedAt: start - 3600e3 };
+  h.call('state.loading = false; state.data = { matches: [fixture], failed: [], fetchedAt: Date.now() }');
+  assert.deepEqual([...h.call('liveTargets().map((m) => m.id)')], ['late']);
+  h.call(`fixture.fetchedAt = ${start + 3600e3}`);
+  assert.equal(h.call('liveTargets().length'), 0);
+  h.call(`fixture.start = new Date(Date.now() - 3600e3).toISOString()`);
+  assert.equal(h.call('liveTargets().length'), 1);
+});
+
+test('live polling keeps a fixed cadence measured from the previous poll start', () => {
+  const h = harness([], true);
+  h.context.fixture = { ...match('live', 'eng.1', 1), status: 'LIVE', live: true, fetchedAt: Date.now() };
+  h.call(`state.data = { matches: [fixture], failed: [], fetchedAt: Date.now() };
+    const delays = []; setTimeout = (fn, ms) => { delays.push(ms); return 1; };
+    lastLivePoll = Date.now() - 20e3; scheduleLivePoll()`);
+  const delay = h.call('delays[0]');
+  assert.ok(delay > 9e3 && delay <= 10e3, `delay ${delay}`);
+});
+
 test('live score hints keep the oldest visible score time across day and week views', () => {
   const h = harness([], true);
   const now = new Date('2026-10-01T12:00:00').getTime();
@@ -636,7 +737,7 @@ test('live score hints keep the oldest visible score time across day and week vi
   assert.equal(h.elements['#updated'].textContent, '比分更新于 9/30 12:00');
   h.call(`state.followed = [mkFollowRecord('86', 'Real Madrid', nameKeys(freshLive.home), ['esp.1'])]; state.onlyFollowed = true; publish()`);
   assert.equal(h.elements['#updated'].textContent, '比分更新于 12:00');
-  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  assert.match(h.hero(), /进行中比分约每 30 秒自动更新/);
   assert.doesNotMatch(h.hero(), /比分可能已延迟/);
 });
 
@@ -654,7 +755,7 @@ test('score hints report affected live games while retaining the previous result
   assert.equal(h.elements['#updated'].textContent, before);
   h.call(`state.loading = false; fixture.refreshFailed = false; other.status = 'FT'; other.live = false;
     other.refreshFailed = true; publish()`);
-  assert.match(h.hero(), /进行中比分约每分钟自动更新/);
+  assert.match(h.hero(), /进行中比分约每 30 秒自动更新/);
   assert.doesNotMatch(h.hero(), /比分更新失败/);
   h.call('fixture.status = "FT"; fixture.live = false; publish()');
   assert.doesNotMatch(h.hero(), /id="scoreUpdate"/);
@@ -697,21 +798,6 @@ test('a page-level refresh error keeps the live score and schedules another atte
   assert.match(h.hero(), /比分更新失败 · 稍后自动重试/);
 });
 
-test('the live poll asks only for leagues that have a live match', async () => {
-  const h = harness([], true);
-  h.context.live = { ...match('live', 'eng.1', 30), status: 'LIVE', live: true, start: new Date().toISOString() };
-  h.context.finished = { ...match('done', 'esp.1', 30), status: 'FT', live: false, start: new Date().toISOString() };
-  h.call(`state.loading = false; state.enabled = new Set(['eng.1', 'esp.1']);
-    state.data = { matches: [live, finished], failed: [], fetchedAt: Date.now() }; publish()`);
-  assert.deepEqual([...h.call('livePollLeagues()')], ['eng.1']);
-  h.call(`const loadCalls = []; enrichEmptyDay = async () => {}; schedulePrefetch = () => {};
-    loadDayVisible = async (key, opts) => { loadCalls.push(opts); return { dayKey: key, matches: [], failed: [], fetchedAt: Date.now() }; }`);
-  await h.call("reload({ force: true, refreshLeagues: ['eng.1'] })");
-  assert.equal(h.call('loadCalls.length'), 1);
-  assert.deepEqual([...h.call('loadCalls[0].refreshLeagues')], ['eng.1']);
-  assert.equal(h.call('loadCalls[0].force'), true);
-});
-
 test('partially unavailable leagues do not hide nearby cached matchdays', async () => {
   const h = harness([
     monthCache('eng.1', [match('known', 'eng.1', 22)]),
@@ -741,46 +827,6 @@ test('failed refresh with old data explicitly reports stale cache', async () => 
   assert.equal(day.fromCache, true);
   assert.equal(day.stale, true);
   assert.equal(day.failed.length, 0);
-});
-
-test('a targeted refresh only re-fetches the leagues that were asked for', async () => {
-  const h = harness([], false);
-  const day = h.call('dayKeyOf(new Date())');
-  const months = h.call(`monthsForDay(${JSON.stringify(day)})`);
-  const start = new Date().toISOString();
-  const event = (id, league) => ({ id, league, start, status: 'SCHEDULED',
-    home: { name: 'Home', teamId: '1' }, away: { name: 'Away', teamId: '2' } });
-  for (const ym of months) {
-    seedMonth(h, 'eng.1', ym, [event('target', 'eng.1')]);
-    seedMonth(h, 'esp.1', ym, [event('kept', 'esp.1')]);
-  }
-  const urls = [];
-  const liveEvent = { id: 'target', date: start, status: { type: { name: 'STATUS_IN_PROGRESS', state: 'in' } },
-    competitions: [{ competitors: [
-      { homeAway: 'home', team: { id: '1', displayName: 'Home' }, score: '1' },
-      { homeAway: 'away', team: { id: '2', displayName: 'Away' }, score: '0' },
-    ] }] };
-  h.setFetch((url) => {
-    urls.push(String(url));
-    return { ok: true, json: async () => ({ leagues: [], events: String(url).includes('/eng.1/') ? [liveEvent] : [] }) };
-  });
-  const view = await h.call(`loadDay(${JSON.stringify(day)}, { leagues: ['eng.1', 'esp.1'], force: true, refreshLeagues: ['eng.1'] })`);
-  assert.ok(urls.some((url) => url.includes('/eng.1/')), 'the live league is refreshed');
-  assert.equal(urls.some((url) => url.includes('/esp.1/')), false, 'other leagues stay on cache');
-  assert.deepEqual([...view.matches.map((m) => m.id)].sort(), ['kept', 'target']);
-  assert.equal(view.matches.find((m) => m.id === 'target').status, 'LIVE');
-  assert.equal(view.stale, false);
-});
-
-test('a forced day load reuses the seeded snapshot instead of downloading it again', async () => {
-  const h = harness([], false);
-  const day = h.call('dayKeyOf(new Date())');
-  for (const ym of h.call(`monthsForDay(${JSON.stringify(day)})`)) seedMonth(h, 'eng.1', ym, []);
-  h.call('const seedCalls = []; seedFromSnapshot = (opts = {}) => { seedCalls.push(opts); return Promise.resolve(false); };');
-  h.setFetch(() => ({ ok: true, json: async () => ({ events: [], leagues: [] }) }));
-  await h.call(`loadDay(${JSON.stringify(day)}, { leagues: ['eng.1'], force: true })`);
-  assert.equal(h.call('seedCalls.length'), 1);
-  assert.equal(h.call('seedCalls[0].force'), undefined);
 });
 
 test('no cache plus failed fetch remains unavailable, not a confirmed empty day', async () => {
@@ -2062,4 +2108,123 @@ test('removing one follow also removes its retained empty-day preview immediatel
   assert.deepEqual([...h.call('getSnapshot().preview.matches.map((m) => m.id)')], ['united']);
   assert.equal(h.call('getSnapshot().preview.count'), 1);
   assert.doesNotMatch(h.elements['#list'].innerHTML, /阿森纳/);
+});
+
+test('calendar files fold to 75 octets, use CRLF and escape text values', () => {
+  const ics = calendarBlock({
+    name: '赛程 · 托特纳姆热刺足球俱乐部与英格兰国家队联合订阅日历',
+    events: [{
+      uid: 'e1@football-schedule', stamp: Date.parse('2026-09-30T12:00:00Z'),
+      start: Date.parse('2026-09-30T19:00:00Z'), title: 'A,B; C\\D\nE', description: '英超 · 托特纳姆热刺 vs 阿森纳',
+    }],
+  });
+  for (const line of ics.split('\r\n')) assert.ok(Buffer.byteLength(line, 'utf8') <= 75, `line too long: ${line}`);
+  assert.ok(!/[^\r]\n/.test(ics), 'only CRLF line endings');
+  assert.ok(ics.endsWith('END:VCALENDAR\r\n'));
+  assert.match(ics, /SUMMARY:A\\,B\\; C\\\\D\\nE/);
+  assert.match(ics, /DTSTART:20260930T190000Z/);
+  assert.match(ics, /X-WR-CALNAME:赛程 · 托特纳姆热刺/);
+});
+
+test('cancelled and postponed matches keep their UID but drop the alarm', () => {
+  const base = { uid: '401879288@football-schedule', stamp: 1790000000000, start: Date.parse('2026-10-01T12:00:00Z'), title: '阿森纳 vs 切尔西', alarmMinutes: 30 };
+  const confirmed = eventBlock(base);
+  assert.match(confirmed, /STATUS:CONFIRMED/);
+  assert.match(confirmed, /TRIGGER:-PT30M/);
+  assert.match(confirmed, /UID:401879288@football-schedule/);
+  const cancelled = eventBlock({ ...base, status: 'CANCELLED' });
+  assert.match(cancelled, /STATUS:CANCELLED/);
+  assert.match(cancelled, /SUMMARY:\[已取消\] 阿森纳 vs 切尔西/);
+  assert.doesNotMatch(cancelled, /VALARM/);
+  const postponed = eventBlock({ ...base, status: 'POSTPONED' });
+  assert.match(postponed, /STATUS:TENTATIVE/);
+  assert.match(postponed, /\[延期\]/);
+  assert.doesNotMatch(postponed, /VALARM/);
+  assert.match(postponed, /UID:401879288@football-schedule/);
+});
+
+test('team calendars only carry that team\'s upcoming matches and stay identical between builds', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ics-'));
+  const snapshot = path.join(dir, 'schedule.json');
+  const now = Date.parse('2026-09-30T12:00:00Z');
+  const side = (name, teamId) => ({ name, teamId });
+  const match = (id, start, home, away, status = 'SCHEDULED') => ({ id, league: 'eng.1', start, status, home, away });
+  fs.writeFileSync(snapshot, JSON.stringify({ generatedAt: now, months: {
+    'eng.1|202609': { fetchedAt: now, league: { id: 'eng.1' }, events: [
+      match('m1', '2026-09-29T19:00:00Z', side('Arsenal', '359'), side('Chelsea', '363')),
+      match('m2', '2026-10-03T14:00:00Z', side('Arsenal', '359'), side('Chelsea', '363')),
+      match('m3', '2026-10-05T14:00:00Z', side('Chelsea', '363'), side('Liverpool', '364'), 'POSTPONED'),
+    ] },
+  } }));
+  const first = buildCalendars({ snapshotPath: snapshot, now, siteUrl: 'https://example.test/' });
+  const later = buildCalendars({ snapshotPath: snapshot, now: now + 60000, siteUrl: 'https://example.test/' });
+  assert.deepEqual([...first.files.keys()].sort(), ['359.ics', '363.ics', '364.ics']);
+  const arsenal = first.files.get('359.ics');
+  assert.equal((arsenal.match(/BEGIN:VEVENT/g) || []).length, 1, 'past matches are dropped');
+  assert.match(arsenal, /SUMMARY:阿森纳 vs 切尔西/);
+  assert.match(arsenal, /LOCATION:英超 · 主场/);
+  assert.match(arsenal, /X-WR-CALNAME:赛程 · 阿森纳/);
+  const chelsea = first.files.get('363.ics');
+  assert.equal((chelsea.match(/BEGIN:VEVENT/g) || []).length, 2);
+  assert.match(chelsea, /STATUS:TENTATIVE/);
+  assert.equal(arsenal, later.files.get('359.ics'), 'a new build from the same snapshot keeps event times stable');
+  const entry = first.index.teams.find((team) => team.id === '359');
+  assert.deepEqual({ zh: entry.zh, count: entry.count, keys: entry.keys }, { zh: '阿森纳', count: 1, keys: ['arsenal'] });
+});
+
+test('exporting follows merges calendars without duplicating shared matches', () => {
+  const one = (uid) => calendarBlock({ name: '赛程 · 测试', events: [{ uid, stamp: 1, start: 1790000000000, title: 'A vs B' }] });
+  const merged = mergeCalendars([one('shared@x'), one('shared@x'), one('unique@x')], { name: '赛程 · 我的关注' });
+  assert.equal((merged.match(/BEGIN:VCALENDAR/g) || []).length, 1);
+  assert.equal((merged.match(/BEGIN:VEVENT/g) || []).length, 2);
+  assert.match(merged, /X-WR-CALNAME:赛程 · 我的关注/);
+});
+
+test('writeCache prunes and retries once when localStorage quota is exceeded', () => {
+  const now = new Date();
+  const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const old = Array.from({ length: 130 }, (_, i) => [`fs1|m|eng.1|${1990 + Math.floor(i / 12)}${String(i % 12 + 1).padStart(2, '0')}`, JSON.stringify({ fetchedAt: i })]);
+  const h = harness(old);
+  const set = h.storage.setItem;
+  let quotaErrors = 0;
+  h.storage.setItem = (key, value) => {
+    if (h.storage.length >= 130 && h.storage.getItem(key) === null) { quotaErrors++; const e = new Error('full'); e.name = 'QuotaExceededError'; throw e; }
+    set(key, value);
+  };
+  h.context.cacheYm = ym;
+  assert.doesNotThrow(() => h.call('writeCache("esp.1", cacheYm, { fetchedAt: Date.now(), events: [] })'));
+  assert.equal(quotaErrors, 1);
+  assert.ok(h.storage.getItem(`fs1|m|esp.1|${ym}`));
+  assert.ok(h.storage.length <= 128);
+  h.storage.setItem = () => { throw new Error('always full'); };
+  assert.doesNotThrow(() => h.call('writeCache("ita.1", cacheYm, { fetchedAt: Date.now(), events: [] })'));
+});
+
+test('reconnecting tolerates view data without a failed list', () => {
+  const h = harness([], true);
+  h.call(`state.view = 'day'; state.loading = false; state.error = null;
+    state.data = { matches: [], fetchedAt: Date.now() };
+    let bareReconnects = 0; reload = () => { bareReconnects++; }`);
+  assert.doesNotThrow(() => h.call('onOnline()'));
+  assert.equal(h.call('bareReconnects'), 0);
+});
+
+test('date shortcuts work from match rows and buttons but stay out of inputs and dialogs', () => {
+  const h = harness([], true);
+  const target = (hit) => ({ matches: () => false, closest: (sel) => (hit && sel.includes(hit) ? {} : null) });
+  h.context.kt = target;
+  const start = h.call('state.dayKey');
+  h.call(`onKeyDown({ key: 'ArrowRight', target: kt(null), preventDefault() {} })`);
+  assert.equal(h.call('state.dayKey'), h.call(`addDays(${JSON.stringify(start)}, 1)`));
+  for (const hit of ['input', 'dialog', 'tablist']) {
+    h.call(`onKeyDown({ key: 'ArrowRight', target: kt(${JSON.stringify(hit)}), preventDefault() {} })`);
+    assert.equal(h.call('state.dayKey'), h.call(`addDays(${JSON.stringify(start)}, 1)`));
+  }
+});
+
+test('import stripping handles multi-line and side-effect imports', () => {
+  const strip = (src) => src.replace(/^import\s+(?:['"][^'"\n]+['"]|[^;'"]*?\bfrom\s*['"][^'"\n]+['"])\s*;?[ \t]*\n/gm, '');
+  assert.equal(strip("import {\n  a,\n  b,\n} from './x.js';\nimport './y.js';\nimport z from \"z\"\nconst k = 1;\n"), 'const k = 1;\n');
+  assert.doesNotMatch(dataSource, /^import /m);
+  assert.doesNotMatch(appSource, /^import /m);
 });
