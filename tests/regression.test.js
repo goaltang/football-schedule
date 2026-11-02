@@ -7,7 +7,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { tsImport } from 'tsx/esm/api';
@@ -25,7 +25,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 // The VM isolates storage, clock and requests. React views are the same components
 // used by the browser; no legacy HTML renderer is kept for the tests.
 const scriptSource = (file) => fs.readFileSync(path.join(root, file), 'utf8')
-  .replace(/^import .*?;\n/gm, '').replace(/^export \{[\s\S]*?\};?\n?/gm, '');
+  // 兼容单行、多行和纯副作用 import
+  .replace(/^import\s+(?:['"][^'"\n]+['"]|[^;'"]*?\bfrom\s*['"][^'"\n]+['"])\s*;?[ \t]*\n/gm, '').replace(/^export \{[\s\S]*?\};?\n?/gm, '');
 const dataSource = scriptSource('data.js');
 const appSource = scriptSource('app.js');
 
@@ -228,6 +229,18 @@ test('national team search merges competitions and supports Chinese names and ni
   assert.equal(h.call('zhName("Türkiye")'), '土耳其');
   assert.equal(h.call('zhName("Congo DR")'), '刚果民主共和国');
   assert.equal(h.call('zhName("Congo")'), '刚果共和国');
+});
+
+test('club suffixes never eat the last letter of a team name', () => {
+  const h = harness([], true);
+  /* "Shenhua" 结尾的 a 不能和后面的 "FC" 拼成后缀 "afc" 被一起删掉 */
+  assert.equal(h.call('normalizeTeamName("SHANGHAI SHENHUA FC")'), 'shanghaishenhua');
+  assert.equal(h.call('zhName("SHANGHAI SHENHUA FC")'), '上海申花');
+  assert.equal(h.call('zhName("Shanghai Shenhua")'), '上海申花');
+  assert.equal(h.call('zhName("Roma FC")'), '罗马');
+  assert.equal(h.call('normalizeTeamName("AFC Bournemouth")'), 'bournemouth');
+  assert.equal(h.call('normalizeTeamName("1. FC Union Berlin")'), h.call('normalizeTeamName("Union Berlin")'));
+  assert.equal(h.call('zhName("FC Barcelona")'), '巴塞罗那');
 });
 
 test('following a national team from one match finds its disabled qualifiers and cup matches', async () => {
@@ -1859,7 +1872,8 @@ test('snapshot CLIs import shared ESM normalizers and publish valid schedule and
       }]
     } });`);
     for (const file of ['build-snapshot.js', 'build-teams-snapshot.js']) {
-      const result = spawnSync(process.execPath, ['--import', mock, path.join(directory, 'tools', file)], { encoding: 'utf8', timeout: 10000 });
+      // --import 需要 URL：Windows 的 D:\... 会被当成 URL scheme 拒绝。
+      const result = spawnSync(process.execPath, ['--import', pathToFileURL(mock).href, path.join(directory, 'tools', file)], { encoding: 'utf8', timeout: 10000 });
       assert.equal(result.status, 0, result.stderr || String(result.error));
     }
     const { LEAGUES } = await import('../config.js');
@@ -2203,4 +2217,53 @@ test('changelog entry point and list render accessibly', () => {
   assert.match(list, /<time class="changelog-date" datetime="2026-10-28">2026\.10\.28<\/time>/i);
   assert.match(list, /aria-label="查看 PR #14：加进日历（新窗口打开）"/);
   assert.match(list, /rel="noopener noreferrer"/);
+});
+
+test('writeCache prunes and retries once when localStorage quota is exceeded', () => {
+  const now = new Date();
+  const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const old = Array.from({ length: 130 }, (_, i) => [`fs1|m|eng.1|${1990 + Math.floor(i / 12)}${String(i % 12 + 1).padStart(2, '0')}`, JSON.stringify({ fetchedAt: i })]);
+  const h = harness(old);
+  const set = h.storage.setItem;
+  let quotaErrors = 0;
+  h.storage.setItem = (key, value) => {
+    if (h.storage.length >= 130 && h.storage.getItem(key) === null) { quotaErrors++; const e = new Error('full'); e.name = 'QuotaExceededError'; throw e; }
+    set(key, value);
+  };
+  h.context.cacheYm = ym;
+  assert.doesNotThrow(() => h.call('writeCache("esp.1", cacheYm, { fetchedAt: Date.now(), events: [] })'));
+  assert.equal(quotaErrors, 1);
+  assert.ok(h.storage.getItem(`fs1|m|esp.1|${ym}`));
+  assert.ok(h.storage.length <= 128);
+  h.storage.setItem = () => { throw new Error('always full'); };
+  assert.doesNotThrow(() => h.call('writeCache("ita.1", cacheYm, { fetchedAt: Date.now(), events: [] })'));
+});
+
+test('reconnecting tolerates view data without a failed list', () => {
+  const h = harness([], true);
+  h.call(`state.view = 'day'; state.loading = false; state.error = null;
+    state.data = { matches: [], fetchedAt: Date.now() };
+    let bareReconnects = 0; reload = () => { bareReconnects++; }`);
+  assert.doesNotThrow(() => h.call('onOnline()'));
+  assert.equal(h.call('bareReconnects'), 0);
+});
+
+test('date shortcuts work from match rows and buttons but stay out of inputs and dialogs', () => {
+  const h = harness([], true);
+  const target = (hit) => ({ matches: () => false, closest: (sel) => (hit && sel.includes(hit) ? {} : null) });
+  h.context.kt = target;
+  const start = h.call('state.dayKey');
+  h.call(`onKeyDown({ key: 'ArrowRight', target: kt(null), preventDefault() {} })`);
+  assert.equal(h.call('state.dayKey'), h.call(`addDays(${JSON.stringify(start)}, 1)`));
+  for (const hit of ['input', 'dialog', 'tablist']) {
+    h.call(`onKeyDown({ key: 'ArrowRight', target: kt(${JSON.stringify(hit)}), preventDefault() {} })`);
+    assert.equal(h.call('state.dayKey'), h.call(`addDays(${JSON.stringify(start)}, 1)`));
+  }
+});
+
+test('import stripping handles multi-line and side-effect imports', () => {
+  const strip = (src) => src.replace(/^import\s+(?:['"][^'"\n]+['"]|[^;'"]*?\bfrom\s*['"][^'"\n]+['"])\s*;?[ \t]*\n/gm, '');
+  assert.equal(strip("import {\n  a,\n  b,\n} from './x.js';\nimport './y.js';\nimport z from \"z\"\nconst k = 1;\n"), 'const k = 1;\n');
+  assert.doesNotMatch(dataSource, /^import /m);
+  assert.doesNotMatch(appSource, /^import /m);
 });

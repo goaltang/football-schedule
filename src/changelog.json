@@ -1,9 +1,24 @@
 [
   {
-    "id": "2026-11-02-changelog",
+    "id": "pr-20",
     "date": "2026-11-02",
     "title": "新增更新日志",
-    "summary": "页面底部可以查看网站的重要更新，有新内容时入口会亮起小红点。"
+    "summary": "页面底部可以查看网站的重要更新，有新内容时入口会亮起小红点。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/20"
+  },
+  {
+    "id": "pr-19",
+    "date": "2026-11-02",
+    "title": "离线缓存与快捷键修复",
+    "summary": "本地缓存写满时自动清理旧数据，断网重连更稳定；日期快捷键和开赛倒计时更准确，并改进了读屏支持。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/19"
+  },
+  {
+    "id": "pr-13",
+    "date": "2026-11-02",
+    "title": "修复部分中文队名",
+    "summary": "修复“上海申花”等队名被截掉词尾的问题，现在能正常显示中文名，也能搜索到。",
+    "pr": "https://github.com/goaltang/football-schedule/pull/13"
   },
   {
     "id": "pr-18",

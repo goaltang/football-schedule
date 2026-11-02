@@ -24,7 +24,7 @@ npm run preview
 验证改动：
 
 ```bash
-node --test tests/regression.test.js
+npm test
 npm run build
 npx playwright install chromium
 npm run test:e2e
